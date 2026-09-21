@@ -5,25 +5,17 @@ from __future__ import annotations
 import functools
 import logging
 
-from flask import Blueprint, jsonify, redirect, render_template_string, request, session, url_for
+from flask import Blueprint, redirect, render_template, request, session, url_for
 
 from services.auth_service import AuthService
+from services.rate_limiter import LoginRateLimiter
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
 
-_LOGIN_TEMPLATE = """
-<!doctype html>
-<title>Admin Login</title>
-<h1>Admin Login</h1>
-{% if error %}<p style="color:#b00020">{{ error }}</p>{% endif %}
-<form method="post" action="{{ url_for('auth.login') }}">
-  <p><label>Email <input type="email" name="email" autocomplete="username" required></label></p>
-  <p><label>Password <input type="password" name="password" autocomplete="current-password" required></label></p>
-  <p><button type="submit">Log in</button></p>
-</form>
-"""
+# Process-local login abuse protection (see LoginRateLimiter for prod caveats).
+login_rate_limiter = LoginRateLimiter()
 
 
 def current_admin():
@@ -41,7 +33,7 @@ def login_required(view):
     def wrapped(*args, **kwargs):
         admin = current_admin()
         if admin is None:
-            return redirect(url_for("auth.login"))
+            return redirect(url_for("auth.login_form"))
         return view(*args, admin=admin, **kwargs)
 
     return wrapped
@@ -50,26 +42,35 @@ def login_required(view):
 @auth_bp.get("/login")
 def login_form():
     if current_admin() is not None:
-        return redirect(url_for("view_leads"))
-    return render_template_string(_LOGIN_TEMPLATE, error=None)
+        return redirect(url_for("dashboard.index"))
+    return render_template("login.html", error=None)
 
 
 @auth_bp.post("/login")
 def login():
+    client_key = request.remote_addr or "unknown"
+    if login_rate_limiter.is_blocked(client_key):
+        logger.warning("Login temporarily blocked for client %s", client_key)
+        return render_template("login.html", error="Too many attempts. Please try again later."), 429
+
     email = request.form.get("email", "")
     password = request.form.get("password", "")
     admin = AuthService.authenticate(email, password)
     if admin is None:
-        logger.warning("Failed admin login attempt from %s", request.remote_addr or "unknown")
-        return render_template_string(_LOGIN_TEMPLATE, error="Invalid email or password."), 401
+        login_rate_limiter.register_failure(client_key)
+        logger.warning("Failed admin login attempt from %s", client_key)
+        # Generic message: never reveal whether the account exists.
+        return render_template("login.html", error="Invalid email or password."), 401
+
+    login_rate_limiter.reset(client_key)
     session.clear()
     session["admin_id"] = admin.id
     logger.info("Admin %s logged in (business_id=%s)", admin.id, admin.business_id)
-    return redirect(url_for("view_leads"))
+    return redirect(url_for("dashboard.index"))
 
 
 @auth_bp.post("/logout")
 @auth_bp.get("/logout")
 def logout():
     session.clear()
-    return redirect(url_for("auth.login"))
+    return redirect(url_for("auth.login_form"))

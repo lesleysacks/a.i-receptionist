@@ -11,6 +11,7 @@ import os
 import tempfile
 
 # Configure the environment before importing any application module.
+os.environ.setdefault("APP_ENV", "testing")
 os.environ.setdefault("TWILIO_ACCOUNT_SID", "AC" + "x" * 32)
 os.environ.setdefault("TWILIO_AUTH_TOKEN", "test_auth_token")
 os.environ.setdefault("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
@@ -36,8 +37,13 @@ from services.auth_service import AuthService  # noqa: E402
 @pytest.fixture(autouse=True)
 def reset_db():
     """Give every test a clean schema (also clears durable conversation state)."""
+    import sys
+
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    app_module = sys.modules.get("app")
+    if app_module is not None:
+        app_module.login_rate_limiter.reset()
     yield
 
 

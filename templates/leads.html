@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Leads{% endblock %}
+{% block body %}
+<h1>WhatsApp Leads Dashboard</h1>
+<p>Business: {{ business.name }}</p>
+<table>
+  <tr><th>Name</th><th>Phone</th><th>Date</th><th>Service</th><th>Time</th></tr>
+  {% for lead in leads %}
+  <tr>
+    <td>{{ lead.name }}</td>
+    <td>{{ lead.phone }}</td>
+    <td>{{ lead.date }}</td>
+    <td>{{ lead.message }}</td>
+    <td>{{ lead.time }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

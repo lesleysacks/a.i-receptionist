@@ -4,14 +4,18 @@ Guidance for AI agents and developers working in this repository.
 
 ## Project overview
 
-Multi-tenant WhatsApp AI receptionist (Flask + Twilio + OpenAI, SQLAlchemy/SQLite).
-Key modules:
+Multi-tenant WhatsApp AI receptionist (Flask + Twilio + OpenAI, SQLAlchemy;
+SQLite for dev, PostgreSQL for production). Key modules:
 
-- `app.py` — Flask app, `/whatsapp` webhook (routes by Twilio `To` number), `/leads` (auth + tenant-scoped).
-- `services/conversation_service.py` — booking finite-state machine with durable, tenant-scoped state.
+- `app.py` — Flask app, config wiring, CSRF, `/whatsapp` webhook (routes by Twilio `To` number), `/leads`.
+- `config.py` — environment profiles (development/testing/production).
+- `database.py` — engine (SQLite or PostgreSQL via `DATABASE_URL`) + pooling + FK enforcement.
+- `migrations/` — Alembic migrations (schema source of truth in production).
+- `services/conversation_service.py` — booking FSM with durable, tenant-scoped state.
 - `services/business_service.py` — tenant config, `get_by_whatsapp_number` routing.
-- `services/auth_service.py`, `routes/auth.py` — admin login/logout (hashed passwords, sessions).
-- `routes/admin.py` — tenant-scoped `/admin/*` JSON API (session or API key + `X-Business-Id`).
+- `services/auth_service.py`, `services/rate_limiter.py`, `routes/auth.py` — login (hashed passwords, sessions, rate limiting).
+- `routes/dashboard.py` + `templates/` — server-rendered admin UI (services/FAQs/business/leads), CSRF-protected.
+- `routes/admin.py` — tenant-scoped `/admin/*` JSON API (session or operator API key + `X-Business-Id`).
 - `manage.py` — CLI to init the DB and create businesses/services/admins.
 
 ## Cursor Cloud specific instructions
@@ -32,11 +36,13 @@ pip install -r requirements.txt
 
 ```bash
 . .venv/bin/activate
-python manage.py init-db
+alembic upgrade head        # apply migrations (works for SQLite or PostgreSQL)
+python manage.py init-db    # dev convenience (create_all); no-op in production
 ```
 
-Tables are also auto-created on first app boot. `DATABASE_URL` defaults to
-`sqlite:///receptionist.db`.
+`DATABASE_URL` defaults to `sqlite:///receptionist.db`. For PostgreSQL set
+`DATABASE_URL=postgresql://user:pass@host:5432/dbname`. In production
+(`APP_ENV=production`) the app does not auto-create tables — run `alembic upgrade head`.
 
 ### Run Flask
 

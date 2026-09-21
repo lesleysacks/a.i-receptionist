@@ -1,24 +1,26 @@
 ﻿# AI Receptionist Flask App
 # Handles WhatsApp messages using Twilio and OpenAI
 
-from flask import Flask, request, render_template_string, url_for
+from flask import Flask, request, render_template, url_for
+from flask_wtf import CSRFProtect
 from twilio.twiml.messaging_response import MessagingResponse
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 import os
-import secrets
 import datetime
 import logging
 
+from config import apply_config
 from database import init_database
 from services.booking_service import BookingService
 from services.business_service import BusinessService
 from services.ai_service import AIService
 from services.conversation_service import ConversationService
 from routes.admin import admin_bp
-from routes.auth import auth_bp, login_required
+from routes.auth import auth_bp, login_required, login_rate_limiter
+from routes.dashboard import dashboard_bp
 
 load_dotenv()
 logging.basicConfig(
@@ -28,20 +30,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
-# Session/cookie hardening. SECRET_KEY must be set for sessions to persist across
-# restarts; otherwise an ephemeral per-process key is used (dev only).
-app.secret_key = os.getenv("SECRET_KEY") or os.getenv("FLASK_SECRET_KEY")
-if not app.secret_key:
-    app.secret_key = secrets.token_hex(32)
-    logger.warning("SECRET_KEY is not set; using an ephemeral key. Admin sessions will not survive a restart.")
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
-)
+# Environment-aware config (debug, session/cookie hardening, CSRF, secret key).
+apply_config(app)
+
+# CSRF protection for browser/session forms. The Twilio webhook and the JSON
+# admin API (session- or API-key-authenticated machine clients) are exempted
+# below so they keep their own auth mechanisms.
+csrf = CSRFProtect(app)
 
 app.register_blueprint(admin_bp)
+csrf.exempt(admin_bp)
 app.register_blueprint(auth_bp)
+app.register_blueprint(dashboard_bp)
 
 # -----------------------------
 # Twilio credentials
@@ -114,6 +114,7 @@ def _mask(sender: str) -> str:
 # WhatsApp webhook
 # -----------------------------
 @app.route("/whatsapp", methods=["POST"])
+@csrf.exempt
 def whatsapp():
     if not is_valid_twilio_request():
         return "Invalid request", 403
@@ -148,28 +149,6 @@ def whatsapp():
 @app.route("/leads")
 @login_required
 def view_leads(admin):
-    html = """
-    <h1>WhatsApp Leads Dashboard</h1>
-    <p>Business: {{ business_name }} &mdash; <a href="{{ url_for('auth.logout') }}">Log out</a></p>
-    <table border="1" cellpadding="10">
-        <tr>
-            <th>Name</th>
-            <th>Phone</th>
-            <th>Date</th>
-            <th>Service</th>
-            <th>Time</th>
-        </tr>
-        {% for lead in leads %}
-        <tr>
-            <td>{{ lead.name }}</td>
-            <td>{{ lead.phone }}</td>
-            <td>{{ lead.date }}</td>
-            <td>{{ lead.message }}</td>
-            <td>{{ lead.time }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    """
     business = BusinessService.get_business(admin.business_id)
     leads = [
         {
@@ -181,7 +160,7 @@ def view_leads(admin):
         }
         for booking in BookingService.list_bookings(admin.business_id)
     ]
-    return render_template_string(html, leads=leads, business_name=business.name)
+    return render_template("leads.html", admin=admin, business=business, leads=leads)
 
 # -----------------------------
 # Reminders
