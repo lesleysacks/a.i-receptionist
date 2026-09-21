@@ -15,6 +15,7 @@ from database import init_database
 from services.booking_service import BookingService
 from services.business_service import BusinessService
 from services.ai_service import AIService
+from services.conversation_service import ConversationService
 from routes.admin import admin_bp
 
 load_dotenv()
@@ -22,6 +23,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.register_blueprint(admin_bp)
 
@@ -42,18 +44,41 @@ if missing_env:
 
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 validator = RequestValidator(TWILIO_AUTH_TOKEN)
-users = {}
 
 # -----------------------------
 # Database initialisation
 # -----------------------------
 init_database()
-ai_service = AIService()
 
 
 def current_business():
     """Resolve the default tenant afresh so admin edits apply immediately."""
     return BusinessService.get_default_business()
+
+
+def notify_owner(business, booking):
+    """Send the owner a WhatsApp notification about a new booking."""
+    owner_phone = business.owner_phone or OWNER_PHONE_NUMBER
+    if not owner_phone:
+        logger.info("Owner notification skipped: no owner phone configured for business_id=%s", business.id)
+        return
+    text = (
+        "New WhatsApp booking\n\n"
+        f"Name: {booking.customer.name}\n"
+        f"Phone: {booking.customer.phone}\n"
+        f"Date: {booking.appointment_at:%Y-%m-%d %H:%M}\n"
+        f"Service: {booking.service}"
+    )
+    client.messages.create(from_=TWILIO_PHONE_NUMBER, body=text, to=owner_phone)
+    logger.info("Owner notified for booking_id=%s", booking.id)
+
+
+# The conversation service owns the booking finite-state machine and AI routing.
+conversation_service = ConversationService(
+    ai_service=AIService(),
+    notifier=notify_owner,
+)
+
 
 # -----------------------------
 # Twilio request validation
@@ -65,126 +90,14 @@ def is_valid_twilio_request():
     params = {k: v for k, v in request.form.items()}
     return validator.validate(request.url, params, signature)
 
-# -----------------------------
-# Booking helpers
-# -----------------------------
-def parse_datetime(value):
-    value = value.strip()
-    formats = [
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %I:%M %p",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%Y %I:%M %p",
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-    ]
-    for fmt in formats:
-        try:
-            parsed = datetime.datetime.strptime(value, fmt)
-            if fmt in ["%Y-%m-%d", "%d/%m/%Y"]:
-                return parsed.replace(hour=9, minute=0)
-            return parsed
-        except ValueError:
-            continue
-    return None
 
-
-def reset_user(sender):
-    users[sender] = {"step": "start", "updated": datetime.datetime.now().isoformat()}
-
-
-def save_booking(name, date, phone, message):
-    booking = BookingService.create_booking(
-        current_business().id,
-        name,
-        datetime.datetime.strptime(date, "%Y-%m-%d %H:%M"),
-        phone,
-        message,
-    )
-    lead = {
-        "name": booking.customer.name,
-        "date": booking.appointment_at.strftime("%Y-%m-%d %H:%M"),
-        "phone": booking.customer.phone,
-        "message": booking.service,
-        "time": booking.created_at.strftime("%Y-%m-%d %H:%M"),
-    }
-    print("NEW LEAD:", lead)
-    notify_owner(lead, current_business().owner_phone or OWNER_PHONE_NUMBER)
-
-
-def notify_owner(lead, owner_phone):
-    if not owner_phone:
-        print("Owner notification skipped: no owner phone number is configured.")
-        return
-    text = f"""
-📩 New WhatsApp Booking!
-
-Name: {lead['name']}
-Phone: {lead['phone']}
-Date: {lead['date']}
-Service: {lead['message']}
-Time: {lead['time']}
-"""
-    try:
-        client.messages.create(
-            from_=TWILIO_PHONE_NUMBER,
-            body=text,
-            to=owner_phone,
-        )
-        print("Owner notified ✅")
-    except Exception as exc:
-        print("Failed to notify owner:", exc)
-
-
-def ai_generate(message, sender):
-    """Route booking-form messages or free-form questions through AIService."""
+def _mask(sender: str) -> str:
+    """Mask a phone/identifier for logging so we never log full customer numbers."""
     if not sender:
-        return "Unable to read your phone number. Please send your message again."
-    message = (message or "").strip()
-    if sender not in users:
-        reset_user(sender)
+        return "<unknown>"
+    tail = sender[-4:]
+    return f"***{tail}"
 
-    step = users[sender]["step"]
-    if step == "ask_name":
-        users[sender]["name"] = message
-        users[sender]["step"] = "ask_date"
-        reply = f"Thanks {message}! What date would you like to book? (e.g. 2025-09-30 14:30)"
-        ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-        return reply
-
-    if step == "ask_date":
-        parsed_date = parse_datetime(message)
-        if not parsed_date:
-            reply = "Please send a valid date and time in one of these formats: YYYY-MM-DD HH:MM or DD/MM/YYYY HH:MM."
-            ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-            return reply
-        users[sender]["date"] = parsed_date.strftime("%Y-%m-%d %H:%M")
-        users[sender]["step"] = "ask_service"
-        reply = "Great. What service do you need for your booking?"
-        ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-        return reply
-
-    if step == "ask_service":
-        users[sender]["service"] = message
-        save_booking(users[sender]["name"], users[sender]["date"], sender, message)
-        users[sender]["step"] = "done"
-        reply = f"""
-✅ Booking request received!
-
-Name: {users[sender]['name']}
-Date: {users[sender]['date']}
-Service: {message}
-
-A consultant will contact you shortly.
-"""
-        ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-        return reply
-
-    result = ai_service.respond(current_business().id, sender, message)
-    if result.action == "start_booking" and current_business().booking_enabled:
-        reset_user(sender)
-        users[sender]["step"] = "ask_name"
-    return result.message
 
 # -----------------------------
 # WhatsApp webhook
@@ -201,11 +114,12 @@ def whatsapp():
     if not sender:
         return "Sender number is required", 400
 
-    reply = ai_generate(incoming_msg, sender)
+    reply = conversation_service.handle(current_business().id, sender, incoming_msg)
     resp = MessagingResponse()
     resp.message(reply)
-    print(f"{sender}: {incoming_msg} -> {reply}")
+    logger.info("Handled inbound WhatsApp message from %s", _mask(sender))
     return str(resp)
+
 
 # -----------------------------
 # Leads dashboard
@@ -258,9 +172,9 @@ def send_reminders():
         try:
             client.messages.create(from_=TWILIO_PHONE_NUMBER, body=text, to=booking.customer.phone)
             BookingService.mark_reminder_sent(booking.id)
-            print(f"Reminder sent to {booking.customer.name} ✅")
-        except Exception as exc:
-            print("Failed to send reminder:", exc)
+            logger.info("Reminder sent for booking_id=%s", booking.id)
+        except Exception:
+            logger.exception("Failed to send reminder for booking_id=%s", booking.id)
 
 
 @app.route("/")

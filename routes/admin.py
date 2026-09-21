@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+import os
 import re
 from datetime import date, datetime
 from decimal import Decimal
@@ -17,6 +19,22 @@ from services.business_service import BusinessService, NotFoundError, Validation
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s().-]{6,30}$")
+
+
+@admin_bp.before_request
+def _require_admin_key():
+    """Protect the admin API when ADMIN_API_KEY is configured.
+
+    When the variable is unset (local development/tests) the API stays open, so
+    this hardening is opt-in and never weakens an existing deployment.
+    """
+    expected = os.getenv("ADMIN_API_KEY")
+    if not expected:
+        return None
+    provided = request.headers.get("X-Admin-Key", "")
+    if not hmac.compare_digest(provided, expected):
+        return jsonify({"error": "Unauthorized."}), 401
+    return None
 
 
 def _default_business() -> Business:
