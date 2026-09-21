@@ -1,30 +1,49 @@
 # AI Receptionist
 
-A WhatsApp-powered AI receptionist (Flask + Twilio + OpenAI) that answers
-customer questions from configured business data and books appointments through
-a guided, stateful conversation. Bookings are persisted per business and are
-visible to owners through an admin API and a leads dashboard.
+A multi-tenant, WhatsApp-powered AI receptionist (Flask + Twilio + OpenAI). Each
+business has its own WhatsApp number; inbound messages are routed to the correct
+business, answered from that business's configured data, and can book
+appointments through a guided, **durable** conversation. Bookings become leads
+that authenticated business admins can view — scoped strictly to their own
+business.
 
 > For the original end-user/Twilio walkthrough, see [`README-SETUP.md`](README-SETUP.md).
 
 ---
 
-## Status: what works locally vs. what needs real credentials
+## Architecture
+
+```
+Inbound WhatsApp ──"To" number──▶ Business (tenant) ──▶ Conversation FSM ──▶ Booking ──▶ Lead
+                    (routing)         (isolation)        (durable state)     (idempotent)
+
+Admin ──login (session)──▶ Authenticated ──scoped to──▶ Business ──▶ that business's Leads only
+```
+
+- **Routing** — the Twilio `To` number is normalized and looked up against
+  `Business.whatsapp_number`. Unknown/missing numbers get a safe reply and are
+  never silently attributed to another tenant.
+- **Isolation** — every business-scoped query takes an explicit `business_id`;
+  there is no "default business" fallback in any customer- or admin-facing path.
+- **Durable conversation state** — the booking FSM is persisted per
+  `(business_id, sender)` in the `conversation_states` table, so a conversation
+  resumes after an application/process restart.
+- **Auth** — admins log in with a hashed password (session cookie). `/leads` and
+  the `/admin/*` API are protected and scoped to the admin's own business.
+
+## Status: works locally vs. requires real credentials
 
 | Capability | Status |
 | --- | --- |
-| Booking conversation (start → name → date → service → confirm → persist) | **WORKS LOCALLY** (no external services required) |
-| Input validation (date/time, unknown service, cancel/restart/change) | **WORKS LOCALLY** |
-| Admin API (`/admin/*`) and leads dashboard (`/leads`) | **WORKS LOCALLY** |
-| Twilio webhook signature validation | **WORKS LOCALLY** (uses `TWILIO_AUTH_TOKEN`; can be exercised with a computed test signature) |
-| AI free-form answers via OpenAI | **REQUIRES REAL CREDENTIALS** (`OPENAI_API_KEY`). Fully tested through a mocked seam; falls back safely when unavailable. |
-| Sending WhatsApp replies / owner notifications / reminders | **REQUIRES REAL CREDENTIALS** (real Twilio account) |
+| Multi-business routing, booking FSM, tenant isolation | WORKS LOCALLY |
+| Durable conversation state (survives restart) | WORKS LOCALLY |
+| Admin login/logout, tenant-scoped `/leads`, admin API | WORKS LOCALLY |
+| Twilio webhook signature validation | WORKS LOCALLY (computed test signature) |
+| AI free-form answers via OpenAI | REQUIRES REAL CREDENTIALS (`OPENAI_API_KEY`); tested via mocked seam, safe fallback otherwise |
+| Live WhatsApp send / owner notifications / reminders | REQUIRES REAL CREDENTIALS (real Twilio account) |
 
-The booking flow does **not** require OpenAI: booking intent is detected
-deterministically, so the full booking conversation and persistence work with no
-external services. OpenAI is only used for free-form question answering.
-
----
+The booking flow does **not** require OpenAI (booking intent is detected
+deterministically); OpenAI only powers free-form question answering.
 
 ## Local setup
 
@@ -36,39 +55,45 @@ pip install -r requirements.txt
 
 (On Debian/Ubuntu you may first need `sudo apt-get install -y python3.12-venv`.)
 
-Cloud Agent environment setup is defined in [`.cursor/environment.json`](.cursor/environment.json).
+## Initialize the database and bootstrap a tenant
+
+```bash
+python manage.py init-db
+python manage.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
+python manage.py add-service --business-id 1 --name "PLC Programming" --price 750
+python manage.py create-admin --business-id 1 --email admin@a.com   # prompts for password
+```
+
+The SQLite tables are also created automatically on first app boot.
 
 ## Environment variables
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `TWILIO_ACCOUNT_SID` | Yes (to boot) | Twilio account SID. A dev placeholder is fine locally. |
-| `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio auth token; also used to validate webhook signatures. |
-| `TWILIO_WHATSAPP_NUMBER` / `TWILIO_PHONE_NUMBER` | No | Sender number for outbound WhatsApp messages. |
-| `OWNER_PHONE_NUMBER` | No | Fallback owner number for booking notifications. |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio credentials; the auth token also validates webhook signatures. Dev placeholders are fine locally. |
+| `SECRET_KEY` | Recommended | Flask session signing key. Without it an ephemeral key is used and admin sessions do not survive a restart. |
+| `SESSION_COOKIE_SECURE` | No | Set `true` in production (HTTPS) so session cookies are only sent over TLS. |
+| `ADMIN_API_KEY` | No | Enables operator API-key access to `/admin/*` (must be paired with an `X-Business-Id` header). |
 | `OPENAI_API_KEY` | No | Enables live AI answers. Without it, answers fall back safely. |
-| `OPENAI_MODEL` | No | Chat model (default `gpt-4.1-mini`). |
-| `OPENAI_TIMEOUT` | No | OpenAI request timeout in seconds (default `15`). |
+| `OPENAI_MODEL` / `OPENAI_TIMEOUT` | No | Chat model (default `gpt-4.1-mini`) and request timeout seconds (default `15`). |
+| `TWILIO_WHATSAPP_NUMBER` / `OWNER_PHONE_NUMBER` | No | Outbound sender and fallback owner notification number. |
 | `DATABASE_URL` | No | SQLAlchemy URL (default `sqlite:///receptionist.db`). |
-| `ADMIN_API_KEY` | No | If set, `/admin/*` requires an `X-Admin-Key` header matching this value. |
-| `FLASK_DEBUG` | No | `true` enables Flask debug mode (default `false`; keep off in production). |
-| `PORT` / `LOG_LEVEL` | No | Server port (default `5000`) and log level (default `INFO`). |
+| `PORT` / `LOG_LEVEL` / `FLASK_DEBUG` | No | Server port (5000), log level (INFO), debug (off). |
 
-**Secrets come only from the environment.** Never hard-code or commit credentials.
+**Secrets come only from the environment** — never hard-coded, committed, or logged.
 
 ### Configuring OpenAI
 
-Set `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`, `OPENAI_TIMEOUT`) in your
-environment or a `.env` file. If the key is missing or OpenAI errors/times out,
-the receptionist returns a safe "a team member will assist you" message instead
-of surfacing an error. The booking flow is unaffected.
+Set `OPENAI_API_KEY` (optionally `OPENAI_MODEL`, `OPENAI_TIMEOUT`). If the key is
+missing or OpenAI errors/times out, the receptionist returns a safe "a team
+member will assist you" message; the booking flow is unaffected.
 
 ### Configuring Twilio
 
-Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WHATSAPP_NUMBER`, then
-point your Twilio WhatsApp sandbox webhook at `POST /whatsapp`. Signature
-validation uses `TWILIO_AUTH_TOKEN`; requests without a valid `X-Twilio-Signature`
-are rejected with HTTP 403.
+Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and each business's WhatsApp number
+(`manage.py create-business --whatsapp ...`). Point each Twilio WhatsApp
+number's webhook at `POST /whatsapp`. Requests without a valid
+`X-Twilio-Signature` are rejected with HTTP 403.
 
 ## Running the application
 
@@ -76,14 +101,13 @@ are rejected with HTTP 403.
 . .venv/bin/activate
 export TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 export TWILIO_AUTH_TOKEN=dev_placeholder_token
+export SECRET_KEY=dev-only-secret
 python app.py
 ```
 
-Then:
-
-- Health check: `GET http://localhost:5000/`
-- Leads dashboard: `GET http://localhost:5000/leads`
-- Admin API: `GET http://localhost:5000/admin/business`
+- Health check: `GET /`
+- Admin login: `GET /login` (then the tenant-scoped `GET /leads`)
+- Admin API: `GET /admin/business` (requires login or API key + `X-Business-Id`)
 
 ## Running tests
 
@@ -92,61 +116,34 @@ Then:
 python -m pytest
 ```
 
-Tests use a temporary SQLite database and never call external services (OpenAI
-and Twilio are mocked / signature-computed).
+Tests use a temporary SQLite database and never call external services.
 
-## How the booking conversation works
+## Multi-business routing & tenant isolation
 
-The conversation is a small finite-state machine in
-[`services/conversation_service.py`](services/conversation_service.py):
+- A business is identified by its `whatsapp_number`. Inbound `To` numbers are
+  normalized (channel prefix and formatting stripped) before lookup.
+- Services, FAQs, leads, conversations, and admins are all keyed by `business_id`.
+  Admin actions derive their tenant from the authenticated session (or API-key +
+  `X-Business-Id`), never from the request body, so one admin cannot modify
+  another business.
+- SQLite foreign keys are enforced (via `PRAGMA foreign_keys=ON`), so invalid
+  cross-references are rejected at the database level.
 
-```
-idle → ask_name → ask_date → ask_service → confirm → (persist) → idle
-```
+## Conversation persistence
 
-Example:
+The booking FSM (`idle → ask_name → ask_date → ask_service → confirm`) is stored
+in `conversation_states` keyed by `(business_id, sender)`. A restart resumes the
+conversation exactly where it left off. Confirmation is idempotent: a duplicate
+"yes" (e.g. a network retry) does not create a second booking.
 
-```
-Customer:   I want to book an appointment
-Bot:        Happy to help you book! What name should the booking be under?
-Customer:   John Smith
-Bot:        Thanks, John Smith! What date and time would you like? e.g. 2026-09-30 14:00.
-Customer:   2026-12-30 14:00
-Bot:        Great. Which service would you like to book? We offer: PLC Programming, Factory Automation.
-Customer:   Factory Automation
-Bot:        Please confirm your booking:
-              Name: John Smith
-              Date: 2026-12-30 14:00
-              Service: Factory Automation
-            Reply 'yes' to confirm, or 'no' to cancel.
-Customer:   yes
-Bot:        ✅ Your booking is confirmed! ...
-```
+## Security limitations (not production-hardened)
 
-Supported behaviours:
-
-- **Validation** — unparseable/past dates and unknown services are rejected with
-  a helpful reprompt; the state is preserved.
-- **Corrections** — at the confirmation step the customer can say "change the
-  service/date/name" and only that field is re-collected.
-- **Cancel** — "cancel" / "never mind" ends the booking.
-- **Restart** — "start over" restarts from the name step.
-- **Business isolation** — services, FAQs, and leads are scoped to a single
-  business; one tenant never sees another's data.
-
-Free-form questions (e.g. "What are your opening hours?") are routed to
-`AIService`, which answers using the configured business context and FAQs
-(`services/context_builder.py`) — no business data is hard-coded in the webhook.
-
-## Current MVP limitations
-
-- Conversation state is in-memory per process (not durable; not shared across
-  replicas). A restart clears in-progress bookings.
-- The webhook maps all inbound traffic to the default business; per-number
-  tenant routing is not implemented yet.
-- The `/leads` dashboard is unauthenticated and shows all businesses' bookings —
-  suitable for local/demo use only. Protect it (and scope it per tenant) before
-  production.
-- SQLite is the default store; migrations are minimal.
-- Live OpenAI and live Twilio delivery require real credentials and have not been
+- No CSRF tokens yet; session cookies use `SameSite=Lax` and `HttpOnly`. Enable
+  `SESSION_COOKIE_SECURE=true` behind HTTPS.
+- No login rate-limiting / brute-force lockout yet.
+- The admin API-key principal is an operator-level key (can target any business
+  via `X-Business-Id`); scope it carefully.
+- SQLite is the default store; use a managed database (e.g. Postgres) and real
+  migrations for production. FK enforcement is enabled for SQLite here.
+- Live OpenAI and live Twilio delivery require real credentials and are not
   validated against the real services in this environment.

@@ -6,7 +6,7 @@ import os
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -22,13 +22,32 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+        """SQLite ignores foreign keys unless enabled per connection."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
 def init_database() -> None:
     """Create tables on first boot.
 
     SQLAlchemy metadata creation is intentionally idempotent, which provides a
     lightweight migration path for the initial SQLite release.
     """
-    from models import business, booking, conversation, customer, faq, knowledge_document, service  # noqa: F401
+    from models import (  # noqa: F401
+        admin_user,
+        business,
+        booking,
+        conversation,
+        conversation_state,
+        customer,
+        faq,
+        knowledge_document,
+        service,
+    )
 
     Base.metadata.create_all(bind=engine)
     _migrate_legacy_conversations()

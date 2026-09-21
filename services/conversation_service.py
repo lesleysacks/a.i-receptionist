@@ -1,9 +1,10 @@
 """Conversation orchestration for the WhatsApp receptionist.
 
 Implements a small, explicit finite-state machine for the booking flow and
-delegates free-form questions to the AI seam. All customer-facing failures are
-converted into safe, friendly messages; internal errors are logged for
-developers but never surfaced to the customer.
+delegates free-form questions to the AI seam. Conversation state is persisted
+through a pluggable store so a booking can resume after a restart. All
+customer-facing failures are converted into safe, friendly messages; internal
+errors are logged for developers but never surfaced to the customer.
 """
 
 from __future__ import annotations
@@ -14,6 +15,10 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
+from sqlalchemy import select
+
+from database import get_session
+from models.conversation_state import ConversationState
 from services import validators
 from services.ai_service import AIService
 from services.booking_service import BookingService
@@ -44,17 +49,62 @@ class _State:
     name: str | None = None
     appointment_at: datetime.datetime | None = None
     service: str | None = None
-    updated: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
 
     def reset(self) -> None:
         self.step = IDLE
         self.name = None
         self.appointment_at = None
         self.service = None
-        self.touch()
 
-    def touch(self) -> None:
-        self.updated = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+class InMemoryStateStore:
+    """Non-durable store backed by a plain dict (used by unit tests)."""
+
+    def __init__(self, states: dict | None = None) -> None:
+        self.states: dict[tuple[int, str], _State] = states if states is not None else {}
+
+    def load(self, business_id: int, sender: str) -> _State | None:
+        return self.states.get((business_id, sender))
+
+    def save(self, business_id: int, sender: str, state: _State) -> None:
+        self.states[(business_id, sender)] = state
+
+
+class DbStateStore:
+    """Durable store persisting FSM state per (business, sender) in the database."""
+
+    def load(self, business_id: int, sender: str) -> _State | None:
+        with get_session() as session:
+            row = session.scalar(
+                select(ConversationState).where(
+                    ConversationState.business_id == business_id,
+                    ConversationState.sender == sender,
+                )
+            )
+            if row is None:
+                return None
+            return _State(
+                step=row.step,
+                name=row.name,
+                appointment_at=row.appointment_at,
+                service=row.service,
+            )
+
+    def save(self, business_id: int, sender: str, state: _State) -> None:
+        with get_session() as session:
+            row = session.scalar(
+                select(ConversationState).where(
+                    ConversationState.business_id == business_id,
+                    ConversationState.sender == sender,
+                )
+            )
+            if row is None:
+                row = ConversationState(business_id=business_id, sender=sender)
+                session.add(row)
+            row.step = state.step
+            row.name = state.name
+            row.appointment_at = state.appointment_at
+            row.service = state.service
 
 
 class ConversationService:
@@ -64,10 +114,18 @@ class ConversationService:
         self,
         ai_service: AIService | None = None,
         state_store: dict | None = None,
+        store: InMemoryStateStore | DbStateStore | None = None,
         notifier: Callable[[object, object], None] | None = None,
     ) -> None:
         self.ai_service = ai_service or AIService()
-        self._states: dict[tuple[int, str], _State] = state_store if state_store is not None else {}
+        if store is not None:
+            self.store = store
+        elif state_store is not None:
+            self.store = InMemoryStateStore(state_store)
+        else:
+            self.store = DbStateStore()
+        # Backwards-compatible view for in-memory usage/tests.
+        self._states = self.store.states if isinstance(self.store, InMemoryStateStore) else None
         self._lock = threading.Lock()
         self.notifier = notifier
 
@@ -77,7 +135,8 @@ class ConversationService:
         if not sender:
             return "Sorry, I couldn't read your number. Please try sending your message again."
         try:
-            reply, already_recorded = self._process(business_id, sender, message)
+            with self._lock:
+                reply, already_recorded = self._process(business_id, sender, message)
             if not already_recorded:
                 self._safe_record(business_id, sender, message, reply)
             return reply
@@ -88,15 +147,9 @@ class ConversationService:
             logger.exception("Unhandled error while handling message for business_id=%s", business_id)
             return SAFE_ERROR_MESSAGE
 
-    # -- state helpers ------------------------------------------------------
-    def _get_state(self, business_id: int, sender: str) -> _State:
-        with self._lock:
-            key = (business_id, sender)
-            state = self._states.get(key)
-            if state is None:
-                state = _State()
-                self._states[key] = state
-            return state
+    def get_state(self, business_id: int, sender: str) -> _State:
+        """Return the current (possibly idle) state for a conversation."""
+        return self.store.load(business_id, sender) or _State()
 
     # -- core dispatch ------------------------------------------------------
     def _process(self, business_id: int, sender: str, message: str) -> tuple[str, bool]:
@@ -105,8 +158,13 @@ class ConversationService:
             return "Sorry, I didn't catch that. Could you send your message again?", False
 
         business = BusinessService.get_business(business_id)
-        state = self._get_state(business_id, sender)
+        state = self.store.load(business_id, sender) or _State()
 
+        reply, recorded = self._dispatch(business, business_id, sender, state, message)
+        self.store.save(business_id, sender, state)
+        return reply, recorded
+
+    def _dispatch(self, business, business_id, sender, state, message) -> tuple[str, bool]:
         # Global commands available at any point in an active booking.
         if state.step != IDLE and validators.is_cancel(message):
             state.reset()
@@ -121,17 +179,16 @@ class ConversationService:
                 return self._booking_disabled_reply(), False
             state.reset()
             state.step = ASK_NAME
-            state.touch()
             return "Sure, let's start over. What name should the booking be under?", False
 
         if state.step == IDLE:
-            return self._handle_idle(business, business_id, sender, message)
+            return self._handle_idle(business, business_id, sender, state, message)
         if state.step == ASK_NAME:
-            return self._handle_name(business_id, state, message)
+            return self._handle_name(state, message)
         if state.step == ASK_DATE:
             return self._handle_date(business_id, state, message)
         if state.step == ASK_SERVICE:
-            return self._handle_service(business, business_id, state, message)
+            return self._handle_service(business_id, state, message)
         if state.step == CONFIRM:
             return self._handle_confirm(business, business_id, sender, state, message)
 
@@ -141,35 +198,30 @@ class ConversationService:
         return SAFE_ERROR_MESSAGE, False
 
     # -- individual steps ---------------------------------------------------
-    def _handle_idle(self, business, business_id: int, sender: str, message: str) -> tuple[str, bool]:
+    def _handle_idle(self, business, business_id, sender, state, message) -> tuple[str, bool]:
         if business.booking_enabled and validators.is_booking_intent(message):
-            state = self._get_state(business_id, sender)
             state.step = ASK_NAME
-            state.touch()
             return "Happy to help you book! What name should the booking be under?", False
 
         # Free-form question: delegate to the AI seam (records the exchange itself).
         result = self.ai_service.respond(business_id, sender, message)
         if result.action == "start_booking" and business.booking_enabled:
-            state = self._get_state(business_id, sender)
             state.step = ASK_NAME
-            state.touch()
         return result.message, True
 
-    def _handle_name(self, business_id: int, state: _State, message: str) -> tuple[str, bool]:
+    def _handle_name(self, state, message) -> tuple[str, bool]:
         name = message.strip()
         if len(name) > 120:
             return "That name looks a little long \u2014 could you share a shorter version?", False
         state.name = name
         state.step = ASK_DATE
-        state.touch()
         return (
             f"Thanks, {name}! What date and time would you like? "
             "For example: 2026-09-30 14:00.",
             False,
         )
 
-    def _handle_date(self, business_id: int, state: _State, message: str) -> tuple[str, bool]:
+    def _handle_date(self, business_id, state, message) -> tuple[str, bool]:
         parsed = validators.parse_datetime(message)
         if parsed is None:
             return (
@@ -185,10 +237,9 @@ class ConversationService:
             )
         state.appointment_at = parsed
         state.step = ASK_SERVICE
-        state.touch()
         return f"Great. {self._service_prompt(business_id)}", False
 
-    def _handle_service(self, business, business_id: int, state: _State, message: str) -> tuple[str, bool]:
+    def _handle_service(self, business_id, state, message) -> tuple[str, bool]:
         names = self._active_service_names(business_id)
         if names:
             matched = validators.match_service(message, names)
@@ -204,21 +255,17 @@ class ConversationService:
             service = message.strip()
         state.service = service
         state.step = CONFIRM
-        state.touch()
         return self._summary(state), False
 
-    def _handle_confirm(self, business, business_id: int, sender: str, state: _State, message: str) -> tuple[str, bool]:
+    def _handle_confirm(self, business, business_id, sender, state, message) -> tuple[str, bool]:
         if validators.wants_change_service(message):
             state.step = ASK_SERVICE
-            state.touch()
             return f"Sure \u2014 {self._service_prompt(business_id)}", False
         if validators.wants_change_date(message):
             state.step = ASK_DATE
-            state.touch()
             return "No problem \u2014 what date and time works for you? e.g. 2026-09-30 14:00.", False
         if validators.wants_change_name(message):
             state.step = ASK_NAME
-            state.touch()
             return "Sure \u2014 what name should I use for the booking?", False
         if validators.is_affirmative(message):
             return self._finalise_booking(business, business_id, sender, state)
@@ -234,7 +281,7 @@ class ConversationService:
             False,
         )
 
-    def _finalise_booking(self, business, business_id: int, sender: str, state: _State) -> tuple[str, bool]:
+    def _finalise_booking(self, business, business_id, sender, state) -> tuple[str, bool]:
         if not (state.name and state.appointment_at and state.service):
             logger.error("Confirm reached with incomplete state for business_id=%s", business_id)
             state.reset()

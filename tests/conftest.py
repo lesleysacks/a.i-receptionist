@@ -15,6 +15,7 @@ os.environ.setdefault("TWILIO_ACCOUNT_SID", "AC" + "x" * 32)
 os.environ.setdefault("TWILIO_AUTH_TOKEN", "test_auth_token")
 os.environ.setdefault("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
 os.environ.setdefault("OWNER_PHONE_NUMBER", "whatsapp:+10000000000")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
 # Ensure no live OpenAI calls unless a test explicitly injects a fake client.
 os.environ["OPENAI_API_KEY"] = ""
 
@@ -28,18 +29,15 @@ from database import Base, engine, get_session  # noqa: E402
 from models.business import Business  # noqa: E402
 from models.faq import FAQ  # noqa: E402
 from models.service import Service  # noqa: E402
+from services import validators  # noqa: E402
+from services.auth_service import AuthService  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def reset_db():
-    """Give every test a clean schema and clear any in-memory conversation state."""
-    import sys
-
+    """Give every test a clean schema (also clears durable conversation state)."""
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    app_module = sys.modules.get("app")
-    if app_module is not None:
-        app_module.conversation_service._states.clear()
     yield
 
 
@@ -47,9 +45,15 @@ def reset_db():
 def make_business():
     """Factory that creates a business (plus optional services/FAQs) and returns its id."""
 
-    def _make(name="Test Business", services=None, faqs=None, booking_enabled=True, owner_phone=None):
+    def _make(name="Test Business", services=None, faqs=None, booking_enabled=True,
+              owner_phone=None, whatsapp_number=None):
         with get_session() as session:
-            business = Business(name=name, booking_enabled=booking_enabled, owner_phone=owner_phone)
+            business = Business(
+                name=name,
+                booking_enabled=booking_enabled,
+                owner_phone=owner_phone,
+                whatsapp_number=validators.normalize_phone(whatsapp_number) or None,
+            )
             session.add(business)
             session.flush()
             for service_name in services or []:
@@ -60,3 +64,46 @@ def make_business():
             return business.id
 
     return _make
+
+
+@pytest.fixture
+def make_admin():
+    """Factory that creates an admin user for a business and returns (email, password)."""
+
+    def _make(business_id, email="admin@example.com", password="password123"):
+        AuthService.create_admin(business_id, email, password)
+        return email, password
+
+    return _make
+
+
+@pytest.fixture
+def app_client():
+    """Return a Flask test client for the application."""
+    import app as app_module
+
+    app_module.app.config.update(TESTING=True)
+    return app_module.app.test_client()
+
+
+def login(client, email, password):
+    """Log a test client in via the login form; returns the response."""
+    return client.post("/login", data={"email": email, "password": password})
+
+
+def whatsapp_post(client, body, sender, to, base_url="http://localhost"):
+    """POST a Twilio webhook request with a valid signature."""
+    from twilio.request_validator import RequestValidator
+
+    url = base_url + "/whatsapp"
+    params = {"Body": body, "From": sender}
+    if to is not None:
+        params["To"] = to
+    validator = RequestValidator(os.environ["TWILIO_AUTH_TOKEN"])
+    signature = validator.compute_signature(url, params)
+    return client.post(
+        "/whatsapp",
+        data=params,
+        headers={"X-Twilio-Signature": signature},
+        base_url=base_url,
+    )

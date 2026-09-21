@@ -12,6 +12,7 @@ from database import get_session
 from models.business import Business
 from models.faq import FAQ
 from models.service import Service
+from services import validators
 
 
 class ValidationError(ValueError):
@@ -27,8 +28,9 @@ class BusinessService:
 
     BUSINESS_FIELDS = {
         "name", "industry", "description", "website", "email", "phone", "address", "city", "country",
-        "owner_name", "owner_phone", "timezone", "language", "currency", "booking_enabled", "booking_duration",
-        "website_chat_enabled", "whatsapp_enabled", "voice_enabled", "email_enabled", "opening_hours", "logo_url",
+        "owner_name", "owner_phone", "whatsapp_number", "timezone", "language", "currency", "booking_enabled",
+        "booking_duration", "website_chat_enabled", "whatsapp_enabled", "voice_enabled", "email_enabled",
+        "opening_hours", "logo_url",
     }
 
     @staticmethod
@@ -42,7 +44,12 @@ class BusinessService:
 
     @staticmethod
     def get_default_business() -> Business:
-        """Return the first tenant, creating an unbranded initial record if needed."""
+        """Return the first tenant, creating an unbranded initial record if needed.
+
+        Retained for bootstrap/system use only. Never use this to select a tenant
+        for an inbound customer request — that must be resolved from the inbound
+        WhatsApp number via :meth:`get_by_whatsapp_number`.
+        """
         with get_session() as session:
             business = session.scalar(select(Business).order_by(Business.id).limit(1))
             if business is None:
@@ -50,6 +57,37 @@ class BusinessService:
                 session.add(business)
                 session.flush()
             return business
+
+    @staticmethod
+    def get_by_whatsapp_number(number: str) -> Business | None:
+        """Resolve the business that owns an inbound WhatsApp number, or None.
+
+        Never falls back to another tenant when the number is unknown.
+        """
+        normalized = validators.normalize_phone(number)
+        if not normalized:
+            return None
+        with get_session() as session:
+            return session.scalar(select(Business).where(Business.whatsapp_number == normalized))
+
+    @classmethod
+    def create_business(cls, data: dict[str, Any]) -> Business:
+        """Create a new tenant from explicitly allowed fields."""
+        unknown = set(data) - cls.BUSINESS_FIELDS
+        if unknown:
+            raise ValidationError(f"Unsupported business fields: {', '.join(sorted(unknown))}.")
+        name = str(data.get("name", "")).strip()
+        if not name:
+            raise ValidationError("Business name is required.")
+        payload = cls._clean_business_fields(data)
+        try:
+            with get_session() as session:
+                business = Business(**payload)
+                session.add(business)
+                session.flush()
+                return business
+        except IntegrityError as exc:
+            raise ValidationError("That WhatsApp number is already assigned to another business.") from exc
 
     @classmethod
     def update_business(cls, business_id: int, data: dict[str, Any]) -> Business:
@@ -59,14 +97,32 @@ class BusinessService:
             raise ValidationError(f"Unsupported business fields: {', '.join(sorted(unknown))}.")
         if "name" in data and not str(data["name"]).strip():
             raise ValidationError("Business name is required.")
-        with get_session() as session:
-            business = session.get(Business, business_id)
-            if business is None:
-                raise NotFoundError("Business was not found.")
-            for field, value in data.items():
-                setattr(business, field, value.strip() if isinstance(value, str) else value)
-            session.flush()
-            return business
+        payload = cls._clean_business_fields(data)
+        try:
+            with get_session() as session:
+                business = session.get(Business, business_id)
+                if business is None:
+                    raise NotFoundError("Business was not found.")
+                for field, value in payload.items():
+                    setattr(business, field, value)
+                session.flush()
+                return business
+        except IntegrityError as exc:
+            raise ValidationError("That WhatsApp number is already assigned to another business.") from exc
+
+    @staticmethod
+    def _clean_business_fields(data: dict[str, Any]) -> dict[str, Any]:
+        """Trim strings and normalize the WhatsApp number consistently."""
+        payload: dict[str, Any] = {}
+        for field, value in data.items():
+            if field == "whatsapp_number":
+                normalized = validators.normalize_phone(value) if value else None
+                payload[field] = normalized or None
+            elif isinstance(value, str):
+                payload[field] = value.strip()
+            else:
+                payload[field] = value
+        return payload
 
     @staticmethod
     def get_services(business_id: int, active_only: bool = False) -> list[Service]:

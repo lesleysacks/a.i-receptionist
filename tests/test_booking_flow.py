@@ -58,15 +58,18 @@ def test_full_booking_flow_persists_lead(make_business):
     assert cs._states[key].step == IDLE
 
 
-def test_booking_visible_on_leads_dashboard(make_business):
+def test_booking_visible_on_leads_dashboard(make_business, make_admin, app_client):
     business_id = make_business(name="Genai", services=["PLC Programming"])
     cs = _service()
     for msg in ("book", "Jane Doe", "2026-12-01 10:00", "PLC Programming", "yes"):
         cs.handle(business_id, SENDER, msg)
 
-    import app as app_module
+    from tests.conftest import login
 
-    resp = app_module.app.test_client().get("/leads")
+    email, password = make_admin(business_id)
+    login(app_client, email, password)
+
+    resp = app_client.get("/leads")
     html = resp.get_data(as_text=True)
     assert resp.status_code == 200
     assert "Jane Doe" in html

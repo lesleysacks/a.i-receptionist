@@ -27,6 +27,7 @@ class Business(Base):
     country: Mapped[str | None] = mapped_column(String(120))
     owner_name: Mapped[str | None] = mapped_column(String(160))
     owner_phone: Mapped[str | None] = mapped_column(String(64))
+    whatsapp_number: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
     language: Mapped[str] = mapped_column(String(16), default="en", nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
@@ -47,3 +48,4 @@ class Business(Base):
     knowledge_documents = relationship("KnowledgeDocument", back_populates="business")
     services = relationship("Service", back_populates="business", cascade="all, delete-orphan")
     faqs = relationship("FAQ", back_populates="business", cascade="all, delete-orphan")
+    admin_users = relationship("AdminUser", back_populates="business", cascade="all, delete-orphan")
