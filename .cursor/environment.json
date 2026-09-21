@@ -1,0 +1,11 @@
+{
+  "name": "AI Receptionist Bot",
+  "install": "sudo apt-get update && sudo apt-get install -y python3.12-venv && python3 -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt",
+  "terminals": [
+    {
+      "name": "flask-app",
+      "command": "cd /workspace && . .venv/bin/activate && export TWILIO_ACCOUNT_SID=\"${TWILIO_ACCOUNT_SID:-ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}\" && export TWILIO_AUTH_TOKEN=\"${TWILIO_AUTH_TOKEN:-dev_placeholder_token}\" && export TWILIO_WHATSAPP_NUMBER=\"${TWILIO_WHATSAPP_NUMBER:-whatsapp:+14155238886}\" && export OWNER_PHONE_NUMBER=\"${OWNER_PHONE_NUMBER:-whatsapp:+10000000000}\" && export PORT=\"${PORT:-5000}\" && python app.py"
+    }
+  ],
+  "ports": [5000]
+}
