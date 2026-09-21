@@ -75,9 +75,27 @@ class BookingService:
             return list(session.scalars(statement))
 
     @staticmethod
+    def get(booking_id: int) -> Booking | None:
+        """Load one booking with its customer and business eagerly joined."""
+        with get_session() as session:
+            return session.scalar(
+                select(Booking)
+                .options(joinedload(Booking.customer), joinedload(Booking.business))
+                .where(Booking.id == booking_id)
+            )
+
+    @staticmethod
     def mark_reminder_sent(booking_id: int) -> None:
         """Mark a successfully delivered reminder so it is not resent."""
         with get_session() as session:
             booking = session.get(Booking, booking_id)
             if booking:
                 booking.reminder_sent = True
+
+    @staticmethod
+    def mark_owner_notified(booking_id: int) -> None:
+        """Persist that the owner has been notified (idempotency guard)."""
+        with get_session() as session:
+            booking = session.get(Booking, booking_id)
+            if booking:
+                booking.owner_notified = True

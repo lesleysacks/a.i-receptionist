@@ -8,14 +8,14 @@ import logging
 from flask import Blueprint, redirect, render_template, request, session, url_for
 
 from services.auth_service import AuthService
-from services.rate_limiter import LoginRateLimiter
+from services.rate_limiter import build_login_rate_limiter
 
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__)
 
-# Process-local login abuse protection (see LoginRateLimiter for prod caveats).
-login_rate_limiter = LoginRateLimiter()
+# Redis-backed when REDIS_URL is reachable (shared across workers), else local.
+login_rate_limiter = build_login_rate_limiter()
 
 
 def current_admin():
