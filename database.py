@@ -1,7 +1,13 @@
-"""Database engine and session lifecycle for the receptionist application."""
+"""Database engine and session lifecycle for the receptionist application.
+
+Supports SQLite (local development/tests) and PostgreSQL (production) via a
+single ``DATABASE_URL``. Connection pooling is configured for server databases;
+SQLite uses SQLAlchemy's default single-file connection handling.
+"""
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from typing import Generator
@@ -9,16 +15,47 @@ from typing import Generator
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+logger = logging.getLogger(__name__)
+
 
 class Base(DeclarativeBase):
     """Base class for every persistence model."""
 
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///receptionist.db")
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
-)
+def _normalize_url(url: str) -> str:
+    """Accept the common ``postgres://`` alias used by some hosts."""
+    if url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _create_engine(url: str):
+    """Create an engine with settings appropriate to the backend."""
+    url = _normalize_url(url)
+    if url.startswith("sqlite"):
+        # A single-file DB; keep cross-thread access working for the dev server.
+        return create_engine(url, connect_args={"check_same_thread": False}, future=True)
+    # Server databases (e.g. PostgreSQL): pool with liveness checks and recycling.
+    return create_engine(
+        url,
+        pool_size=_int_env("DB_POOL_SIZE", 5),
+        max_overflow=_int_env("DB_MAX_OVERFLOW", 10),
+        pool_timeout=_int_env("DB_POOL_TIMEOUT", 30),
+        pool_recycle=_int_env("DB_POOL_RECYCLE", 1800),
+        pool_pre_ping=True,
+        future=True,
+    )
+
+
+DATABASE_URL = _normalize_url(os.getenv("DATABASE_URL", "sqlite:///receptionist.db"))
+engine = _create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
@@ -32,22 +69,16 @@ if engine.dialect.name == "sqlite":
 
 
 def init_database() -> None:
-    """Create tables on first boot.
+    """Ensure the schema exists for local development and tests.
 
-    SQLAlchemy metadata creation is intentionally idempotent, which provides a
-    lightweight migration path for the initial SQLite release.
+    In production (``APP_ENV=production``) the schema is owned by Alembic
+    migrations, so this becomes a no-op and never rebuilds or drops tables.
     """
-    from models import (  # noqa: F401
-        admin_user,
-        business,
-        booking,
-        conversation,
-        conversation_state,
-        customer,
-        faq,
-        knowledge_document,
-        service,
-    )
+    if os.getenv("APP_ENV", "development").strip().lower() == "production":
+        logger.info("APP_ENV=production: skipping create_all; schema is managed by Alembic migrations.")
+        return
+
+    import models  # noqa: F401  (registers every table on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
     _migrate_legacy_conversations()

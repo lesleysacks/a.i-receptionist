@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import re
 from datetime import date, datetime
@@ -17,6 +18,8 @@ from models.service import Service
 from routes.auth import current_admin
 from services.business_service import BusinessService, NotFoundError, ValidationError
 
+logger = logging.getLogger(__name__)
+
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s().-]{6,30}$")
@@ -26,11 +29,13 @@ PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s().-]{6,30}$")
 def _authenticate_and_scope():
     """Authenticate the request and bind it to exactly one business.
 
-    Two principals are supported:
+    Two distinct principals are supported:
 
-    - a logged-in admin (session) → scoped to that admin's own business;
-    - an operator API key (``X-Admin-Key`` matching ``ADMIN_API_KEY``) which must
-      also name the target business via ``X-Business-Id``.
+    - **Business admin** (browser session) → scoped to that admin's own business.
+    - **Platform operator** (``X-Admin-Key`` matching ``ADMIN_API_KEY``, an
+      operator-level credential) which MUST name the target business via
+      ``X-Business-Id``. This key is never a tenant credential and cannot log in
+      to the browser UI.
 
     The tenant is always derived here — never from a request body — so an admin
     cannot act on another business by crafting the payload.
@@ -38,6 +43,7 @@ def _authenticate_and_scope():
     admin = current_admin()
     if admin is not None:
         g.admin_business_id = admin.business_id
+        g.admin_principal = "session"
         return None
 
     expected = os.getenv("ADMIN_API_KEY")
@@ -52,6 +58,9 @@ def _authenticate_and_scope():
         except NotFoundError:
             return jsonify({"error": "Business was not found."}), 404
         g.admin_business_id = business_id
+        g.admin_principal = "operator_api_key"
+        # Audit trail (no secret material is logged).
+        logger.info("Operator API key used for %s %s on business_id=%s", request.method, request.path, business_id)
         return None
 
     return jsonify({"error": "Unauthorized."}), 401

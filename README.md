@@ -3,9 +3,9 @@
 A multi-tenant, WhatsApp-powered AI receptionist (Flask + Twilio + OpenAI). Each
 business has its own WhatsApp number; inbound messages are routed to the correct
 business, answered from that business's configured data, and can book
-appointments through a guided, **durable** conversation. Bookings become leads
-that authenticated business admins can view — scoped strictly to their own
-business.
+appointments through a guided, durable conversation. Business admins log in to a
+server-rendered dashboard to manage their services, FAQs, WhatsApp number, and
+view their own leads.
 
 > For the original end-user/Twilio walkthrough, see [`README-SETUP.md`](README-SETUP.md).
 
@@ -17,33 +17,60 @@ business.
 Inbound WhatsApp ──"To" number──▶ Business (tenant) ──▶ Conversation FSM ──▶ Booking ──▶ Lead
                     (routing)         (isolation)        (durable state)     (idempotent)
 
-Admin ──login (session)──▶ Authenticated ──scoped to──▶ Business ──▶ that business's Leads only
+Admin ──login (session + CSRF)──▶ Dashboard ──scoped to──▶ Business ──▶ its Services / FAQs / Leads only
+Operator ──ADMIN_API_KEY + X-Business-Id──▶ JSON /admin API (explicit tenant targeting)
 ```
 
-- **Routing** — the Twilio `To` number is normalized and looked up against
-  `Business.whatsapp_number`. Unknown/missing numbers get a safe reply and are
-  never silently attributed to another tenant.
-- **Isolation** — every business-scoped query takes an explicit `business_id`;
-  there is no "default business" fallback in any customer- or admin-facing path.
-- **Durable conversation state** — the booking FSM is persisted per
-  `(business_id, sender)` in the `conversation_states` table, so a conversation
-  resumes after an application/process restart.
-- **Auth** — admins log in with a hashed password (session cookie). `/leads` and
-  the `/admin/*` API are protected and scoped to the admin's own business.
+## Database: SQLite (dev) vs PostgreSQL (production)
 
-## Status: works locally vs. requires real credentials
+The app selects its backend from `DATABASE_URL` (SQLAlchemy URL):
 
-| Capability | Status |
-| --- | --- |
-| Multi-business routing, booking FSM, tenant isolation | WORKS LOCALLY |
-| Durable conversation state (survives restart) | WORKS LOCALLY |
-| Admin login/logout, tenant-scoped `/leads`, admin API | WORKS LOCALLY |
-| Twilio webhook signature validation | WORKS LOCALLY (computed test signature) |
-| AI free-form answers via OpenAI | REQUIRES REAL CREDENTIALS (`OPENAI_API_KEY`); tested via mocked seam, safe fallback otherwise |
-| Live WhatsApp send / owner notifications / reminders | REQUIRES REAL CREDENTIALS (real Twilio account) |
+- **Local development / tests**: SQLite (default `sqlite:///receptionist.db`). Foreign keys are enforced via `PRAGMA foreign_keys=ON`.
+- **Production**: PostgreSQL, e.g. `DATABASE_URL=postgresql://user:pass@host:5432/dbname` (the `postgres://` alias is normalized automatically). Server databases use a SQLAlchemy `QueuePool` with `pool_pre_ping` and recycling; pool sizing is tunable via `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE`.
 
-The booking flow does **not** require OpenAI (booking intent is detected
-deterministically); OpenAI only powers free-form question answering.
+No application code changes are needed to switch backends — only `DATABASE_URL`.
+
+## Migrations (Alembic)
+
+Schema is managed by Alembic (`migrations/`).
+
+```bash
+alembic upgrade head        # apply all migrations (fresh or existing DB)
+alembic downgrade -1        # revert the last migration
+alembic revision --autogenerate -m "describe change"   # create a new migration
+```
+
+- In **production** (`APP_ENV=production`) the app never calls `create_all`; the schema is owned by migrations, so tables are never silently rebuilt or dropped.
+- In **development/testing** the app auto-creates tables on boot for convenience.
+
+## Configuration profiles
+
+`APP_ENV` selects a profile in `config.py`:
+
+| Profile | Debug | Cookies Secure | CSRF | Notes |
+| --- | --- | --- | --- | --- |
+| `development` (default) | from `FLASK_DEBUG` | off | on | auto `create_all` |
+| `testing` | off | off | off (per-test opt-in) | temp DB |
+| `production` | off | on (default) | on | requires `SECRET_KEY`; migrations only |
+
+## Environment variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `APP_ENV` | No | `development` (default) / `testing` / `production`. |
+| `SECRET_KEY` | Prod: **yes** | Flask session signing key. Required in production; dev uses an ephemeral key. |
+| `DATABASE_URL` | No | SQLAlchemy URL. Default `sqlite:///receptionist.db`; use `postgresql://...` for production. |
+| `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` / `DB_POOL_TIMEOUT` / `DB_POOL_RECYCLE` | No | PostgreSQL pool tuning (defaults 5 / 10 / 30 / 1800). |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio credentials; the auth token validates webhook signatures. |
+| `TWILIO_WHATSAPP_NUMBER` / `OWNER_PHONE_NUMBER` | No | Outbound sender and fallback owner-notification number. |
+| `OPENAI_API_KEY` | No | Enables live AI answers; without it, answers fall back safely. |
+| `OPENAI_MODEL` / `OPENAI_TIMEOUT` | No | Chat model (default `gpt-4.1-mini`) and request timeout seconds (default `15`). |
+| `ADMIN_API_KEY` | No | Operator-level key for the JSON `/admin` API (must send `X-Business-Id`). |
+| `SESSION_COOKIE_SECURE` | No | Force `Secure` session cookies (default on in production). |
+| `LOGIN_MAX_ATTEMPTS` / `LOGIN_WINDOW_SECONDS` / `LOGIN_LOCKOUT_SECONDS` | No | Login rate-limit tuning (defaults 5 / 300 / 300). |
+| `PORT` / `LOG_LEVEL` / `FLASK_DEBUG` | No | Server port (5000), log level (INFO), debug (off). |
+
+**Secrets come only from the environment** — never hard-coded, committed, or logged.
 
 ## Local setup
 
@@ -55,45 +82,15 @@ pip install -r requirements.txt
 
 (On Debian/Ubuntu you may first need `sudo apt-get install -y python3.12-venv`.)
 
-## Initialize the database and bootstrap a tenant
+### Initialize the database and bootstrap a tenant
 
 ```bash
-python manage.py init-db
+# Development (SQLite): tables auto-create, or run migrations explicitly:
+alembic upgrade head
 python manage.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
 python manage.py add-service --business-id 1 --name "PLC Programming" --price 750
-python manage.py create-admin --business-id 1 --email admin@a.com   # prompts for password
+python manage.py create-admin --business-id 1 --email admin@a.com    # prompts for password
 ```
-
-The SQLite tables are also created automatically on first app boot.
-
-## Environment variables
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio credentials; the auth token also validates webhook signatures. Dev placeholders are fine locally. |
-| `SECRET_KEY` | Recommended | Flask session signing key. Without it an ephemeral key is used and admin sessions do not survive a restart. |
-| `SESSION_COOKIE_SECURE` | No | Set `true` in production (HTTPS) so session cookies are only sent over TLS. |
-| `ADMIN_API_KEY` | No | Enables operator API-key access to `/admin/*` (must be paired with an `X-Business-Id` header). |
-| `OPENAI_API_KEY` | No | Enables live AI answers. Without it, answers fall back safely. |
-| `OPENAI_MODEL` / `OPENAI_TIMEOUT` | No | Chat model (default `gpt-4.1-mini`) and request timeout seconds (default `15`). |
-| `TWILIO_WHATSAPP_NUMBER` / `OWNER_PHONE_NUMBER` | No | Outbound sender and fallback owner notification number. |
-| `DATABASE_URL` | No | SQLAlchemy URL (default `sqlite:///receptionist.db`). |
-| `PORT` / `LOG_LEVEL` / `FLASK_DEBUG` | No | Server port (5000), log level (INFO), debug (off). |
-
-**Secrets come only from the environment** — never hard-coded, committed, or logged.
-
-### Configuring OpenAI
-
-Set `OPENAI_API_KEY` (optionally `OPENAI_MODEL`, `OPENAI_TIMEOUT`). If the key is
-missing or OpenAI errors/times out, the receptionist returns a safe "a team
-member will assist you" message; the booking flow is unaffected.
-
-### Configuring Twilio
-
-Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and each business's WhatsApp number
-(`manage.py create-business --whatsapp ...`). Point each Twilio WhatsApp
-number's webhook at `POST /whatsapp`. Requests without a valid
-`X-Twilio-Signature` are rejected with HTTP 403.
 
 ## Running the application
 
@@ -105,9 +102,9 @@ export SECRET_KEY=dev-only-secret
 python app.py
 ```
 
-- Health check: `GET /`
-- Admin login: `GET /login` (then the tenant-scoped `GET /leads`)
-- Admin API: `GET /admin/business` (requires login or API key + `X-Business-Id`)
+- Admin login: `GET /login` → dashboard at `/dashboard` (Services, FAQs, Business, Leads)
+- Leads: `GET /leads` (tenant-scoped, login required)
+- Webhook: `POST /whatsapp` (Twilio signature required)
 
 ## Running tests
 
@@ -116,34 +113,34 @@ python app.py
 python -m pytest
 ```
 
-Tests use a temporary SQLite database and never call external services.
+Tests use a temporary SQLite DB and never call external services. The live
+OpenAI test is skipped unless `OPENAI_API_KEY` is set.
 
-## Multi-business routing & tenant isolation
+## Admin dashboard
 
-- A business is identified by its `whatsapp_number`. Inbound `To` numbers are
-  normalized (channel prefix and formatting stripped) before lookup.
-- Services, FAQs, leads, conversations, and admins are all keyed by `business_id`.
-  Admin actions derive their tenant from the authenticated session (or API-key +
-  `X-Business-Id`), never from the request body, so one admin cannot modify
-  another business.
-- SQLite foreign keys are enforced (via `PRAGMA foreign_keys=ON`), so invalid
-  cross-references are rejected at the database level.
+Business admins sign in and manage, **scoped to their own business only**:
 
-## Conversation persistence
+- **Services** — list / create / edit / delete
+- **FAQs** — list / create / edit / delete
+- **Business** — name, WhatsApp number, contact details, booking toggle
+- **Leads** — bookings for their business
 
-The booking FSM (`idle → ask_name → ask_date → ask_service → confirm`) is stored
-in `conversation_states` keyed by `(business_id, sender)`. A restart resumes the
-conversation exactly where it left off. Confirmation is idempotent: a duplicate
-"yes" (e.g. a network retry) does not create a second booking.
+All browser forms are CSRF-protected. Business A can never view or modify
+Business B's data (enforced at the query level, not just hidden in the UI).
 
-## Security limitations (not production-hardened)
+## Security
 
-- No CSRF tokens yet; session cookies use `SameSite=Lax` and `HttpOnly`. Enable
-  `SESSION_COOKIE_SECURE=true` behind HTTPS.
-- No login rate-limiting / brute-force lockout yet.
-- The admin API-key principal is an operator-level key (can target any business
-  via `X-Business-Id`); scope it carefully.
-- SQLite is the default store; use a managed database (e.g. Postgres) and real
-  migrations for production. FK enforcement is enabled for SQLite here.
-- Live OpenAI and live Twilio delivery require real credentials and are not
-  validated against the real services in this environment.
+- **Passwords**: hashed with werkzeug (`generate_password_hash`); never stored or logged in plaintext.
+- **Sessions/cookies**: `HttpOnly`, `SameSite=Lax`, `Secure` in production.
+- **CSRF**: Flask-WTF `CSRFProtect` on browser forms. The Twilio webhook (its own signature validation) and the JSON `/admin` API (session- or API-key-authenticated machine clients) are exempt.
+- **Login abuse**: per-IP rate limiting with temporary lockout; generic responses that don't reveal whether an account exists.
+- **Tenant isolation**: every business-scoped query takes an explicit `business_id`; the webhook routes by WhatsApp number with no default fallback; admin tenancy is derived from the authenticated principal, never the request body.
+- **Webhook**: Twilio `X-Twilio-Signature` validation (HTTP 403 on failure) is unchanged.
+- **Database**: foreign keys enforced; unique constraints on WhatsApp number, `(business_id, sender)` conversation state, and `(business_id, name)` services.
+
+## Security limitations (not absolutely production-secure)
+
+- Login rate limiting is in-process; a multi-worker deployment should use a shared store (e.g. Redis).
+- The operator `ADMIN_API_KEY` can target any business (by design); distribute it carefully.
+- Live OpenAI and live Twilio delivery require real credentials and are not validated in this environment.
+- A customer message that is exactly a command word (e.g. "cancel"/"restart") is treated as that command even when a name is expected (minor edge case).

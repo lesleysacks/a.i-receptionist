@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if faq else 'New' }} FAQ{% endblock %}
+{% block body %}
+<h1>{{ 'Edit' if faq else 'New' }} FAQ</h1>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label for="question">Question</label>
+  <input id="question" type="text" name="question" value="{{ form.question if form else (faq.question if faq else '') }}" required>
+  <label for="answer">Answer</label>
+  <input id="answer" type="text" name="answer" value="{{ form.answer if form else (faq.answer if faq else '') }}" required>
+  <label for="category">Category</label>
+  <input id="category" type="text" name="category" value="{{ form.category if form else (faq.category if faq and faq.category else '') }}">
+  <label for="priority">Priority</label>
+  <input id="priority" type="number" name="priority" value="{{ form.priority if form else (faq.priority if faq else 0) }}">
+  <button type="submit">Save</button>
+  <a href="{{ url_for('dashboard.faqs') }}">Cancel</a>
+</form>
+{% endblock %}

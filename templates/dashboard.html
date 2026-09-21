@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+<p>Signed in as <strong>{{ admin.email }}</strong>, managing <strong>{{ business.name }}</strong>.</p>
+<ul>
+  <li><a href="{{ url_for('view_leads') }}">Leads</a> &mdash; view bookings for this business</li>
+  <li><a href="{{ url_for('dashboard.services') }}">Services</a> &mdash; {{ service_count }} configured</li>
+  <li><a href="{{ url_for('dashboard.faqs') }}">FAQs</a> &mdash; {{ faq_count }} configured</li>
+  <li><a href="{{ url_for('dashboard.business') }}">Business settings</a> &mdash; WhatsApp number: {{ business.whatsapp_number or 'not set' }}</li>
+</ul>
+{% endblock %}
