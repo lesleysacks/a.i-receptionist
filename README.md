@@ -66,9 +66,14 @@ alembic revision --autogenerate -m "describe change"   # create a new migration
 | `OPENAI_API_KEY` | No | Enables live AI answers; without it, answers fall back safely. |
 | `OPENAI_MODEL` / `OPENAI_TIMEOUT` | No | Chat model (default `gpt-4.1-mini`) and request timeout seconds (default `15`). |
 | `ADMIN_API_KEY` | No | Operator-level key for the JSON `/admin` API (must send `X-Business-Id`). |
+| `REDIS_URL` | No | Enables Redis-backed distributed rate limiting and RQ background jobs (e.g. `redis://redis:6379/0`). Without it, jobs run inline and rate limiting is process-local. |
+| `SENTRY_DSN` | No | Enables optional Sentry error tracking. Without it, error tracking is off and the app runs normally. |
 | `SESSION_COOKIE_SECURE` | No | Force `Secure` session cookies (default on in production). |
 | `LOGIN_MAX_ATTEMPTS` / `LOGIN_WINDOW_SECONDS` / `LOGIN_LOCKOUT_SECONDS` | No | Login rate-limit tuning (defaults 5 / 300 / 300). |
+| `GUNICORN_WORKERS` / `GUNICORN_THREADS` / `GUNICORN_TIMEOUT` | No | Gunicorn tuning (defaults 2 / 4 / 30). |
+| `LOG_FORMAT` | No | `json` (default) or `plain`. |
 | `PORT` / `LOG_LEVEL` / `FLASK_DEBUG` | No | Server port (5000), log level (INFO), debug (off). |
+| `SENTRY_TRACES_SAMPLE_RATE` | No | Sentry tracing sample rate (default 0). |
 
 **Secrets come only from the environment** — never hard-coded, committed, or logged.
 
@@ -106,6 +111,68 @@ python app.py
 - Leads: `GET /leads` (tenant-scoped, login required)
 - Webhook: `POST /whatsapp` (Twilio signature required)
 
+## Docker development (full stack)
+
+Run the complete stack (app + PostgreSQL + Redis + background worker) with Docker
+Compose. Only the app's port is published; Postgres and Redis stay internal.
+
+```bash
+docker compose up --build
+# app on http://localhost:5000
+```
+
+The app container's entrypoint waits for the database, runs `alembic upgrade head`
+(never `create_all`), then starts Gunicorn. The `worker` service runs the RQ
+background worker. Bootstrap tenants once the stack is up:
+
+```bash
+docker compose exec app python manage.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
+docker compose exec app python manage.py create-admin --business-id 1 --email admin@a.com
+```
+
+## Production startup (Gunicorn)
+
+Do not use `flask run` in production. Serve the WSGI app with Gunicorn:
+
+```bash
+alembic upgrade head          # apply migrations first
+gunicorn -c gunicorn.conf.py wsgi:app
+```
+
+Run the background worker as a separate process (requires `REDIS_URL`):
+
+```bash
+python worker.py
+```
+
+## Infrastructure
+
+- **PostgreSQL** — source of truth for businesses, admins, services, FAQs,
+  bookings, and conversation state.
+- **Redis** — ephemeral/shared infrastructure only: distributed login rate
+  limiting and the RQ job queue. It is never the source of truth for business
+  data. If `REDIS_URL` is unset, rate limiting is process-local and jobs run
+  inline (idempotent, so this is safe for single-process dev).
+- **Background worker (RQ)** — runs owner notifications and booking reminders off
+  the request path. Jobs are idempotent (`owner_notified` / `reminder_sent`) and
+  retried a bounded number of times.
+
+## Observability
+
+- `GET /health` — liveness; returns `{"status":"ok"}` and never touches the DB.
+- `GET /ready` — readiness; checks PostgreSQL (and Redis when configured); returns
+  503 when a dependency is down.
+- **Structured JSON logs** (`LOG_FORMAT=json`) with per-request timing
+  (`event`, `method`, `path`, `status`, `latency_ms`, masked `business_id`). No
+  secrets, request bodies, or unmasked customer numbers are logged.
+- **Sentry** (optional) via `SENTRY_DSN`; PII is not sent.
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on pushes and PRs: installs
+dependencies, runs `alembic upgrade head` against a PostgreSQL service, and runs
+`pytest` (with a Redis service). Live OpenAI/Twilio are not required for CI.
+
 ## Running tests
 
 ```bash
@@ -115,6 +182,26 @@ python -m pytest
 
 Tests use a temporary SQLite DB and never call external services. The live
 OpenAI test is skipped unless `OPENAI_API_KEY` is set.
+
+## Troubleshooting
+
+- **`/ready` returns 503** — check `DATABASE_URL` (and `REDIS_URL` if set) and that
+  Postgres/Redis are reachable.
+- **Migrations fail on startup** — ensure the DB is reachable and run
+  `alembic upgrade head` manually to see details.
+- **Background jobs don't run** — ensure `REDIS_URL` is set and the `worker`
+  process/service is running; without Redis, jobs execute inline instead.
+- **Login always blocked / never blocked** — tune `LOGIN_MAX_ATTEMPTS` /
+  `LOGIN_WINDOW_SECONDS` / `LOGIN_LOCKOUT_SECONDS`.
+
+## LOCAL / MOCKED vs LIVE / EXTERNAL SERVICES
+
+- **LOCAL / MOCKED**: booking flow, tenant routing/isolation, admin UI, auth,
+  CSRF, rate limiting, health/readiness, background jobs, migrations, and the
+  full Docker stack all run without any external credentials.
+- **LIVE / EXTERNAL SERVICES** (require real secrets): OpenAI answers
+  (`OPENAI_API_KEY`), Twilio delivery / owner notifications / reminders
+  (`TWILIO_*` + a real WhatsApp number), and Sentry error tracking (`SENTRY_DSN`).
 
 ## Admin dashboard
 
