@@ -9,11 +9,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from models.business import Business
 from models.faq import FAQ
 from models.service import Service
+from routes.auth import current_admin
 from services.business_service import BusinessService, NotFoundError, ValidationError
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -22,23 +23,43 @@ PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s().-]{6,30}$")
 
 
 @admin_bp.before_request
-def _require_admin_key():
-    """Protect the admin API when ADMIN_API_KEY is configured.
+def _authenticate_and_scope():
+    """Authenticate the request and bind it to exactly one business.
 
-    When the variable is unset (local development/tests) the API stays open, so
-    this hardening is opt-in and never weakens an existing deployment.
+    Two principals are supported:
+
+    - a logged-in admin (session) → scoped to that admin's own business;
+    - an operator API key (``X-Admin-Key`` matching ``ADMIN_API_KEY``) which must
+      also name the target business via ``X-Business-Id``.
+
+    The tenant is always derived here — never from a request body — so an admin
+    cannot act on another business by crafting the payload.
     """
-    expected = os.getenv("ADMIN_API_KEY")
-    if not expected:
+    admin = current_admin()
+    if admin is not None:
+        g.admin_business_id = admin.business_id
         return None
+
+    expected = os.getenv("ADMIN_API_KEY")
     provided = request.headers.get("X-Admin-Key", "")
-    if not hmac.compare_digest(provided, expected):
-        return jsonify({"error": "Unauthorized."}), 401
-    return None
+    if expected and provided and hmac.compare_digest(provided, expected):
+        business_id = request.headers.get("X-Business-Id", "")
+        if not business_id.isdigit():
+            return jsonify({"error": "X-Business-Id header is required with the API key."}), 400
+        business_id = int(business_id)
+        try:
+            BusinessService.get_business(business_id)
+        except NotFoundError:
+            return jsonify({"error": "Business was not found."}), 404
+        g.admin_business_id = business_id
+        return None
+
+    return jsonify({"error": "Unauthorized."}), 401
 
 
-def _default_business() -> Business:
-    return BusinessService.get_default_business()
+def _scope() -> int:
+    """Return the business id this request is authorized to act on."""
+    return g.admin_business_id
 
 
 @admin_bp.errorhandler(ValidationError)
@@ -53,58 +74,57 @@ def not_found_error(error: NotFoundError):
 
 @admin_bp.get("/business")
 def get_business():
-    return jsonify(_serialize(_default_business()))
+    return jsonify(_serialize(BusinessService.get_business(_scope())))
 
 
 @admin_bp.put("/business")
 def update_business():
     data = _json_object()
     _validate_business(data)
-    business = _default_business()
-    return jsonify(_serialize(BusinessService.update_business(business.id, data)))
+    return jsonify(_serialize(BusinessService.update_business(_scope(), data)))
 
 
 @admin_bp.get("/services")
 def get_services():
-    return jsonify([_serialize(item) for item in BusinessService.get_services(_default_business().id)])
+    return jsonify([_serialize(item) for item in BusinessService.get_services(_scope())])
 
 
 @admin_bp.post("/services")
 def add_service():
-    service = BusinessService.add_service(_default_business().id, _json_object())
+    service = BusinessService.add_service(_scope(), _json_object())
     return jsonify(_serialize(service)), 201
 
 
 @admin_bp.put("/services/<int:service_id>")
 def update_service(service_id: int):
-    return jsonify(_serialize(BusinessService.update_service(_default_business().id, service_id, _json_object())))
+    return jsonify(_serialize(BusinessService.update_service(_scope(), service_id, _json_object())))
 
 
 @admin_bp.delete("/services/<int:service_id>")
 def delete_service(service_id: int):
-    BusinessService.delete_service(_default_business().id, service_id)
+    BusinessService.delete_service(_scope(), service_id)
     return "", 204
 
 
 @admin_bp.get("/faq")
 def get_faq():
-    return jsonify([_serialize(item) for item in BusinessService.get_faq(_default_business().id)])
+    return jsonify([_serialize(item) for item in BusinessService.get_faq(_scope())])
 
 
 @admin_bp.post("/faq")
 def add_faq():
-    faq = BusinessService.add_faq(_default_business().id, _json_object())
+    faq = BusinessService.add_faq(_scope(), _json_object())
     return jsonify(_serialize(faq)), 201
 
 
 @admin_bp.put("/faq/<int:faq_id>")
 def update_faq(faq_id: int):
-    return jsonify(_serialize(BusinessService.update_faq(_default_business().id, faq_id, _json_object())))
+    return jsonify(_serialize(BusinessService.update_faq(_scope(), faq_id, _json_object())))
 
 
 @admin_bp.delete("/faq/<int:faq_id>")
 def delete_faq(faq_id: int):
-    BusinessService.delete_faq(_default_business().id, faq_id)
+    BusinessService.delete_faq(_scope(), faq_id)
     return "", 204
 
 

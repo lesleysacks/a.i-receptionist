@@ -47,6 +47,26 @@ def normalize(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
+def normalize_phone(value: str | None) -> str:
+    """Normalize a WhatsApp/phone identifier for consistent comparison.
+
+    Strips a leading ``whatsapp:`` channel prefix and any formatting characters,
+    keeping only an optional leading ``+`` and digits. Returns ``""`` when the
+    input has no usable digits.
+    """
+    if not value:
+        return ""
+    text = value.strip().lower()
+    if text.startswith("whatsapp:"):
+        text = text[len("whatsapp:"):]
+    text = text.strip()
+    plus = text.startswith("+")
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        return ""
+    return ("+" + digits) if plus else digits
+
+
 def parse_datetime(value: str | None) -> datetime.datetime | None:
     """Parse a customer-supplied date/time, returning None when unrecognised."""
     if not value:
