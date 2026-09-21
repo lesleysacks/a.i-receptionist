@@ -39,6 +39,7 @@ class AIService:
         self.context_builder = context_builder or ContextBuilder()
         self.client = client
         self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        self.timeout = float(os.getenv("OPENAI_TIMEOUT", "15"))
 
     def respond(self, business_id: int, sender: str, message: str, channel: str = "whatsapp") -> AIResponse:
         """Persist an inbound message, request structured AI output, then persist it."""
@@ -107,7 +108,7 @@ class AIService:
             return self.client
         if not os.getenv("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is not configured")
-        self.client = OpenAI()
+        self.client = OpenAI(timeout=self.timeout)
         return self.client
 
     def _get_or_create_customer(self, business_id: int, phone: str) -> Customer:
