@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+*.db
+*.sqlite3
+.env
+.env.*
+.vscode
+.pytest_cache
+.cursor
+*.log
+README-SETUP.md

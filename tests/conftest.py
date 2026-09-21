@@ -15,8 +15,12 @@ os.environ.setdefault("APP_ENV", "testing")
 os.environ.setdefault("TWILIO_ACCOUNT_SID", "AC" + "x" * 32)
 os.environ.setdefault("TWILIO_AUTH_TOKEN", "test_auth_token")
 os.environ.setdefault("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
-os.environ.setdefault("OWNER_PHONE_NUMBER", "whatsapp:+10000000000")
+# No owner phone in tests so background notification jobs never attempt a real
+# Twilio call (they resolve to a safe "no owner phone" no-op).
+os.environ["OWNER_PHONE_NUMBER"] = ""
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
+# Ensure tests never target a real Redis unless a test opts in explicitly.
+os.environ.pop("REDIS_URL", None)
 # Ensure no live OpenAI calls unless a test explicitly injects a fake client.
 os.environ["OPENAI_API_KEY"] = ""
 

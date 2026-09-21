@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: receptionist
+          POSTGRES_PASSWORD: receptionist
+          POSTGRES_DB: receptionist
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U receptionist"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://receptionist:receptionist@localhost:5432/receptionist
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: ci-secret-key
+      TWILIO_ACCOUNT_SID: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      TWILIO_AUTH_TOKEN: ci_placeholder_token
+      # OPENAI_API_KEY / real Twilio creds are intentionally absent:
+      # live integration tests stay optional and are skipped in normal CI.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Apply migrations (PostgreSQL)
+        run: alembic upgrade head
+
+      - name: Run tests
+        run: python -m pytest
