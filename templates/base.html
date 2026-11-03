@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Admin{% endblock %} &middot; AI Receptionist</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; color: #1a1a1a; }
+    nav { background: #0f172a; color: #fff; padding: 0.8rem 1.2rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+    nav a { color: #cbd5e1; text-decoration: none; }
+    nav a:hover { color: #fff; }
+    nav .brand { font-weight: 700; color: #fff; }
+    nav .spacer { flex: 1; }
+    main { padding: 1.5rem; max-width: 900px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+    th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; }
+    th { background: #f1f5f9; }
+    .err { color: #b00020; }
+    .ok { color: #0a7d28; }
+    form.inline { display: inline; }
+    label { display: block; margin: 0.6rem 0; }
+    input[type=text], input[type=email], input[type=number] { padding: 6px; width: 320px; max-width: 100%; }
+    button, .btn { padding: 6px 12px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">{{ business.name }}</span>
+    <a href="{{ url_for('dashboard.index') }}">Home</a>
+    <a href="{{ url_for('view_leads') }}">Leads</a>
+    <a href="{{ url_for('dashboard.services') }}">Services</a>
+    <a href="{{ url_for('dashboard.faqs') }}">FAQs</a>
+    <a href="{{ url_for('dashboard.business') }}">Business</a>
+    <span class="spacer"></span>
+    <span>{{ admin.email }}</span>
+    <a href="{{ url_for('auth.logout') }}">Log out</a>
+  </nav>
+  <main>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <p class="{{ 'err' if category == 'error' else 'ok' }}">{{ message }}</p>
+      {% endfor %}
+    {% endwith %}
+    {% block body %}{% endblock %}
+  </main>
+</body>
+</html>

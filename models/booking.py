@@ -21,6 +21,7 @@ class Booking(Base):
     appointment_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     service: Mapped[str] = mapped_column(Text, nullable=False)
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    owner_notified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     business = relationship("Business", back_populates="bookings")

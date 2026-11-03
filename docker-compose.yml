@@ -1,0 +1,67 @@
+# Local full-stack for the AI Receptionist: app (Gunicorn) + PostgreSQL + Redis + worker.
+# Postgres and Redis are NOT published to the host — only the app's port is exposed.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: receptionist
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-receptionist}
+      POSTGRES_DB: receptionist
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U receptionist"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    environment:
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DATABASE_URL: postgresql://receptionist:${POSTGRES_PASSWORD:-receptionist}@postgres:5432/receptionist
+      REDIS_URL: redis://redis:6379/0
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-dev_placeholder_token}
+      TWILIO_WHATSAPP_NUMBER: ${TWILIO_WHATSAPP_NUMBER:-whatsapp:+14155238886}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["python", "worker.py"]
+    environment:
+      APP_ENV: production
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DATABASE_URL: postgresql://receptionist:${POSTGRES_PASSWORD:-receptionist}@postgres:5432/receptionist
+      REDIS_URL: redis://redis:6379/0
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-dev_placeholder_token}
+      TWILIO_WHATSAPP_NUMBER: ${TWILIO_WHATSAPP_NUMBER:-whatsapp:+14155238886}
+    # The worker does not apply migrations; the app service owns that.
+    entrypoint: []
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
