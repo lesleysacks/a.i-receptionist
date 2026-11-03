@@ -4,19 +4,17 @@ Guidance for AI agents and developers working in this repository.
 
 ## Project overview
 
-Multi-tenant WhatsApp AI receptionist (Flask + Twilio + OpenAI, SQLAlchemy;
-SQLite for dev, PostgreSQL for production). Key modules:
+Apex hybrid platform: Django management plane (`apps/accounts`, `apps/tenants`,
+`apps/audit`) plus the recovered Flask receptionist engine. Domain logic lives in
+`apex_receptionist/`. SQLite for local tests; PostgreSQL for production.
 
-- `app.py` — Flask app, config wiring, CSRF, `/whatsapp` webhook (routes by Twilio `To` number), `/leads`.
-- `config.py` — environment profiles (development/testing/production).
-- `database.py` — engine (SQLite or PostgreSQL via `DATABASE_URL`) + pooling + FK enforcement.
-- `migrations/` — Alembic migrations (schema source of truth in production).
-- `services/conversation_service.py` — booking FSM with durable, tenant-scoped state.
-- `services/business_service.py` — tenant config, `get_by_whatsapp_number` routing.
-- `services/auth_service.py`, `services/rate_limiter.py`, `routes/auth.py` — login (hashed passwords, sessions, rate limiting).
-- `routes/dashboard.py` + `templates/` — server-rendered admin UI (services/FAQs/business/leads), CSRF-protected.
-- `routes/admin.py` — tenant-scoped `/admin/*` JSON API (session or operator API key + `X-Business-Id`).
-- `manage.py` — CLI to init the DB and create businesses/services/admins.
+- `app.py` — Flask webhook (`/whatsapp`, routes by Twilio `To`), `/leads`, CSRF.
+- `apex/` — Django settings, URLs, WSGI.
+- `apex_receptionist/` — conversation FSM, AI, bookings, SQLAlchemy models.
+- `services/auth_service.py` — Django User + Membership (Flask session still used for the dashboard).
+- `receptionist_cli.py` — bootstrap businesses/services/tenant admins.
+- `manage.py` — Django admin commands (`migrate`, `create_platform_admin`).
+- Alembic `migrations/` for receptionist tables; Django migrations for accounts/tenants/audit.
 
 ## Cursor Cloud specific instructions
 
@@ -36,8 +34,9 @@ pip install -r requirements.txt
 
 ```bash
 . .venv/bin/activate
-alembic upgrade head        # apply migrations (works for SQLite or PostgreSQL)
-python manage.py init-db    # dev convenience (create_all); no-op in production
+alembic upgrade head
+python manage.py migrate
+python receptionist_cli.py init-db    # dev convenience (create_all); no-op in production
 ```
 
 `DATABASE_URL` defaults to `sqlite:///receptionist.db`. For PostgreSQL set
@@ -87,12 +86,12 @@ Tests use a temporary SQLite DB and mock OpenAI/Twilio; no secrets required.
 1. Start the app (above).
 2. Bootstrap two tenants and admins:
    ```bash
-   python manage.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
-   python manage.py add-service --business-id 1 --name "Service A1"
-   python manage.py create-admin --business-id 1 --email a@example.com --password <pw>
-   python manage.py create-business --name "Business B" --whatsapp "whatsapp:+27222222222"
-   python manage.py add-service --business-id 2 --name "Service B1"
-   python manage.py create-admin --business-id 2 --email b@example.com --password <pw>
+   python receptionist_cli.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
+   python receptionist_cli.py add-service --business-id 1 --name "Service A1"
+   python receptionist_cli.py create-admin --business-id 1 --email a@example.com --password <pw>
+   python receptionist_cli.py create-business --name "Business B" --whatsapp "whatsapp:+27222222222"
+   python receptionist_cli.py add-service --business-id 2 --name "Service B1"
+   python receptionist_cli.py create-admin --business-id 2 --email b@example.com --password <pw>
    ```
 3. POST signed `/whatsapp` requests with `To=whatsapp:+27111111111` to drive a
    booking for Business A (a valid `X-Twilio-Signature` is required; compute it

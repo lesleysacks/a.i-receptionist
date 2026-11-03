@@ -1,13 +1,14 @@
 # AI Receptionist
 
-A multi-tenant, WhatsApp-powered AI receptionist (Flask + Twilio + OpenAI). Each
-business has its own WhatsApp number; inbound messages are routed to the correct
-business, answered from that business's configured data, and can book
-appointments through a guided, durable conversation. Business admins log in to a
-server-rendered dashboard to manage their services, FAQs, WhatsApp number, and
-view their own leads.
+Apex by InterSacks Digital: a hybrid WhatsApp AI receptionist (Flask engine) and
+Django management platform. Each business has its own WhatsApp number; inbound
+messages are routed to the correct tenant, answered from that tenant's data, and
+can book appointments through a guided, durable conversation.
 
-> For the original end-user/Twilio walkthrough, see [`README-SETUP.md`](README-SETUP.md).
+> Setup: [`docs/apex-local-development.md`](docs/apex-local-development.md).
+> Phase 0 audit: [`docs/apex-phase-0-architecture-audit.md`](docs/apex-phase-0-architecture-audit.md).
+> Phase 1 notes: [`docs/apex-phase-1-implementation.md`](docs/apex-phase-1-implementation.md).
+> Security: [`docs/apex-security.md`](docs/apex-security.md).
 
 ---
 
@@ -58,8 +59,12 @@ alembic revision --autogenerate -m "describe change"   # create a new migration
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `APP_ENV` | No | `development` (default) / `testing` / `production`. |
-| `SECRET_KEY` | Prod: **yes** | Flask session signing key. Required in production; dev uses an ephemeral key. |
-| `DATABASE_URL` | No | SQLAlchemy URL. Default `sqlite:///receptionist.db`; use `postgresql://...` for production. |
+| `SECRET_KEY` | Prod: **yes** | Flask/Django session signing key. Required in production; dev uses an ephemeral key. |
+| `DJANGO_SETTINGS_MODULE` | No | Default `apex.settings`. |
+| `DJANGO_ALLOWED_HOSTS` | No | Comma-separated hosts for Django. |
+| `WEBHOOK_BASE_URL` | Prod: recommended | Public origin Twilio signed (e.g. `https://apex.example`). |
+| `MAX_CONTENT_LENGTH` | No | Max request body bytes (default 65536). |
+| `DATABASE_URL` | No | SQLAlchemy/Django URL. Default `sqlite:///receptionist.db`; use `postgresql://...` for production. |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` / `DB_POOL_TIMEOUT` / `DB_POOL_RECYCLE` | No | PostgreSQL pool tuning (defaults 5 / 10 / 30 / 1800). |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio credentials; the auth token validates webhook signatures. |
 | `TWILIO_WHATSAPP_NUMBER` / `OWNER_PHONE_NUMBER` | No | Outbound sender and fallback owner-notification number. |
@@ -92,9 +97,10 @@ pip install -r requirements.txt
 ```bash
 # Development (SQLite): tables auto-create, or run migrations explicitly:
 alembic upgrade head
-python manage.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
-python manage.py add-service --business-id 1 --name "PLC Programming" --price 750
-python manage.py create-admin --business-id 1 --email admin@a.com    # prompts for password
+python manage.py migrate
+python receptionist_cli.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
+python receptionist_cli.py add-service --business-id 1 --name "PLC Programming" --price 750
+python receptionist_cli.py create-admin --business-id 1 --email admin@a.com    # prompts for password
 ```
 
 ## Running the application
@@ -122,12 +128,13 @@ docker compose up --build
 ```
 
 The app container's entrypoint waits for the database, runs `alembic upgrade head`
-(never `create_all`), then starts Gunicorn. The `worker` service runs the RQ
-background worker. Bootstrap tenants once the stack is up:
+and `python manage.py migrate` (never `create_all`), then starts Gunicorn. The
+`worker` service runs the RQ background worker. Bootstrap tenants once the stack
+is up:
 
 ```bash
-docker compose exec app python manage.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
-docker compose exec app python manage.py create-admin --business-id 1 --email admin@a.com
+docker compose exec app python receptionist_cli.py create-business --name "Business A" --whatsapp "whatsapp:+27111111111"
+docker compose exec app python receptionist_cli.py create-admin --business-id 1 --email admin@a.com
 ```
 
 ## Production startup (Gunicorn)
@@ -135,7 +142,8 @@ docker compose exec app python manage.py create-admin --business-id 1 --email ad
 Do not use `flask run` in production. Serve the WSGI app with Gunicorn:
 
 ```bash
-alembic upgrade head          # apply migrations first
+alembic upgrade head          # receptionist schema
+python manage.py migrate      # accounts, tenants, audit
 gunicorn -c gunicorn.conf.py wsgi:app
 ```
 
