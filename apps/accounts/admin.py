@@ -1,11 +1,14 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
+from apps.accounts.forms import ApexUserChangeForm, ApexUserCreationForm
 from apps.accounts.models import User
 
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
+    form = ApexUserChangeForm
+    add_form = ApexUserCreationForm
     ordering = ("email",)
     list_display = ("email", "is_active", "is_platform_admin", "is_staff", "date_joined")
     search_fields = ("email",)

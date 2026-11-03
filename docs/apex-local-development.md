@@ -93,6 +93,7 @@ OpenAI test is skipped unless `OPENAI_API_KEY` is set; do not set it in CI.
 
 1. Set `APP_ENV=production`, `SECRET_KEY`, `DATABASE_URL` (PostgreSQL), Twilio vars.
 2. Set `WEBHOOK_BASE_URL` to the public HTTPS origin Twilio calls.
-3. Run Alembic then Django migrate (or use the Docker entrypoint).
-4. Serve `wsgi:app` with Gunicorn; run `python worker.py` when `REDIS_URL` is set.
-5. Point the Twilio WhatsApp webhook to `https://<host>/whatsapp`.
+3. Set `DJANGO_ALLOWED_HOSTS` to the public hostname (comma-separated; no `*`).
+4. Run Alembic then Django migrate (or use the Docker entrypoint).
+5. Serve `wsgi:app` with Gunicorn; run `python worker.py` when `REDIS_URL` is set.
+6. Point the Twilio WhatsApp webhook to `https://<host>/whatsapp`.

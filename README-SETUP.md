@@ -123,7 +123,7 @@ Before starting, gather these items:
    - You'll see your WhatsApp sandbox number (looks like `whatsapp:+14155238886`)
    - Note down all three values
 
-4. **Prepare your owner phone number** with country code (e.g., `whatsapp:+27636628853`)
+4. **Prepare your owner phone number** with country code (e.g., `whatsapp:+27000000000`)
 
 ---
 

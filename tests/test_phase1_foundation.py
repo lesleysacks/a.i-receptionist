@@ -150,3 +150,101 @@ def test_duplicate_message_sid_is_ignored(make_business, app_client):
     assert twice.status_code == 200
     assert b"Message" in once.data
     assert b"Message" not in twice.data
+
+
+def test_tenant_member_cannot_list_platform_tenants(make_business, make_admin):
+    from django.test import Client
+
+    business_id = make_business(name="Member Co")
+    email, password = make_admin(business_id, email="member-ui@example.com")
+    client = Client()
+    assert client.login(username=email, password=password)
+    resp = client.get("/platform/tenants/")
+    assert resp.status_code == 403
+
+
+def test_platform_admin_can_list_tenants(make_business):
+    from django.test import Client
+
+    make_business(name="Listed Co")
+    user = User.objects.create_user(
+        email="staff-ui@intersacks.example",
+        password="staff-pass-123",
+        is_platform_admin=True,
+    )
+    client = Client()
+    client.force_login(user)
+    resp = client.get("/platform/tenants/")
+    assert resp.status_code == 200
+    assert b"Listed Co" in resp.content
+
+
+def test_django_logout_is_post_only_and_revokes_session():
+    from django.test import Client
+
+    client = Client()
+    User.objects.create_user(email="out@example.com", password="out-pass-1234")
+    client.post("/accounts/login/", {"email": "out@example.com", "password": "out-pass-1234"})
+    assert client.get("/accounts/").status_code == 200
+    assert client.get("/accounts/logout/").status_code == 405
+    resp = client.post("/accounts/logout/")
+    assert resp.status_code == 302
+    follow = client.get("/accounts/")
+    assert follow.status_code == 302
+    assert "/accounts/login/" in follow.url
+    assert AuditEvent.objects.filter(action="auth.logout").exists()
+
+
+def test_oversized_payload_is_rejected():
+    import app as app_module
+    from flask import request
+    from werkzeug.exceptions import RequestEntityTooLarge
+
+    flask_app = app_module.app
+    limit = flask_app.config["MAX_CONTENT_LENGTH"]
+    assert limit == 64 * 1024
+    payload = b"x" * (limit + 1)
+    try:
+        with flask_app.test_request_context(
+            "/whatsapp",
+            method="POST",
+            data=payload,
+            content_type="application/x-www-form-urlencoded",
+        ):
+            request.get_data()
+        raised = False
+    except RequestEntityTooLarge as exc:
+        raised = True
+        assert exc.code == 413
+    assert raised
+
+
+def test_production_allowed_hosts_require_explicit_names():
+    from apex.settings import allowed_hosts_for_env
+
+    assert "testserver" in allowed_hosts_for_env("testing", None)
+    try:
+        allowed_hosts_for_env("production", None)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised
+    try:
+        allowed_hosts_for_env("production", "*")
+        wildcard = False
+    except RuntimeError:
+        wildcard = True
+    assert wildcard
+    assert allowed_hosts_for_env("production", "apex.example") == ["apex.example"]
+
+
+def test_custom_user_admin_forms_use_email_not_username():
+    from apps.accounts.forms import ApexUserChangeForm, ApexUserCreationForm
+
+    user = User.objects.create_user(email="form@example.com", password="form-pass-123")
+    change = ApexUserChangeForm(instance=user)
+    create = ApexUserCreationForm()
+    assert "email" in change.fields
+    assert "username" not in change.fields
+    assert "email" in create.fields
+    assert "username" not in create.fields

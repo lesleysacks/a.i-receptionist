@@ -26,11 +26,23 @@ if not SECRET_KEY:
         raise RuntimeError("SECRET_KEY must be set in production.")
     SECRET_KEY = "django-insecure-dev-only-not-for-production"
 
-ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
-if APP_ENV == "testing":
-    ALLOWED_HOSTS = list({*ALLOWED_HOSTS, "testserver", "localhost", "127.0.0.1"})
-elif APP_ENV == "production" and ALLOWED_HOSTS == ["localhost", "127.0.0.1"]:
-    ALLOWED_HOSTS = ["*"]  # overridden by the platform host; still require SECRET_KEY
+
+def allowed_hosts_for_env(app_env: str, raw: str | None) -> list[str]:
+    """Parse DJANGO_ALLOWED_HOSTS. Production must name explicit hosts."""
+    env = (app_env or "development").strip().lower()
+    hosts = [host.strip() for host in (raw or "").split(",") if host.strip()]
+    if env == "production":
+        if not hosts or hosts == ["*"]:
+            raise RuntimeError("DJANGO_ALLOWED_HOSTS must list explicit hosts in production.")
+        return hosts
+    if not hosts:
+        hosts = ["localhost", "127.0.0.1"]
+    if env == "testing":
+        return sorted(set(hosts) | {"testserver", "localhost", "127.0.0.1"})
+    return hosts
+
+
+ALLOWED_HOSTS = allowed_hosts_for_env(APP_ENV, os.getenv("DJANGO_ALLOWED_HOSTS"))
 
 
 def _database_from_url(url: str) -> dict:

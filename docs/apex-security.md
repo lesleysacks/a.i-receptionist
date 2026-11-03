@@ -9,6 +9,7 @@
 | CSRF on Django login | Django `CsrfViewMiddleware` |
 | Password hashing | Django PBKDF2 via `User.set_password` |
 | Session cookies | HttpOnly, SameSite=Lax, Secure in production |
+| Django hosts | `DJANGO_ALLOWED_HOSTS` required in production; wildcard `*` rejected |
 | Login rate limit | Flask `/login` (Redis or process-local) |
 | Tenant isolation | Membership queries; platform admin must send `X-Business-Id` |
 | JSON admin auth | Session principal or `ADMIN_API_KEY` + `X-Business-Id` |
@@ -30,6 +31,7 @@
 | No CSRF | Flask-WTF + Django CSRF |
 | No request size limit | `MAX_CONTENT_LENGTH` |
 | Duplicate webhook deliveries | MessageSid idempotency |
+| Production Django `ALLOWED_HOSTS=["*"]` | Fail closed unless explicit hosts are set |
 
 ## Required rotation (do not print values)
 
@@ -49,6 +51,8 @@ Provide secrets only via environment variables or a secret manager. Names:
 
 `SECRET_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `OPENAI_API_KEY`,
 `ADMIN_API_KEY`, `ADMIN_PASSWORD`, `SENTRY_DSN`, `DATABASE_URL`, `REDIS_URL`.
+
+Non-secret but required in production: `DJANGO_ALLOWED_HOSTS` (explicit hosts only).
 
 Never log them. Never put them in docs, fixtures, or audit metadata.
 

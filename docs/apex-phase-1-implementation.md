@@ -43,6 +43,8 @@ to Django.
 - Canonical `WEBHOOK_BASE_URL` for Twilio signatures, `MessageSid` idempotency,
   request size limits, safe 500 handler, PII-safe logs (already masked on M5).
 - Credential-shaped README examples removed; `businesses.json` sanitised.
+- Production Django `ALLOWED_HOSTS` must be explicit (`DJANGO_ALLOWED_HOSTS`).
+- Django logout is POST + CSRF only; custom user admin forms use email.
 
 ## Roles
 
