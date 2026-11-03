@@ -12,11 +12,13 @@ from typing import Any
 
 from flask import Blueprint, g, jsonify, request
 
+from apps.audit.services import record_audit
 from models.business import Business
 from models.faq import FAQ
 from models.service import Service
 from routes.auth import current_admin
 from services.business_service import BusinessService, NotFoundError, ValidationError
+from apps.tenants.services import AccessDenied, resolve_business_id_for_user, user_is_platform_admin
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,27 @@ def _authenticate_and_scope():
     """
     admin = current_admin()
     if admin is not None:
-        g.admin_business_id = admin.business_id
+        requested = request.headers.get("X-Business-Id", "").strip()
+        requested_id = int(requested) if requested.isdigit() else None
+        try:
+            from apps.accounts.models import User
+
+            user = User.objects.filter(pk=admin.id).first()
+            if user is not None and user_is_platform_admin(user):
+                business_id = resolve_business_id_for_user(user, requested_business_id=requested_id)
+            else:
+                if requested_id is not None and requested_id != admin.business_id:
+                    return jsonify({"error": "Forbidden."}), 403
+                business_id = admin.business_id
+        except AccessDenied as exc:
+            return jsonify({"error": str(exc)}), 403
+        if business_id is None:
+            return jsonify({"error": "X-Business-Id header is required."}), 400
+        if request.method not in {"GET", "HEAD"} and not admin.can_write and not (
+            user is not None and user_is_platform_admin(user)
+        ):
+            return jsonify({"error": "Read-only membership cannot change tenant data."}), 403
+        g.admin_business_id = business_id
         g.admin_principal = "session"
         return None
 
@@ -59,8 +81,13 @@ def _authenticate_and_scope():
             return jsonify({"error": "Business was not found."}), 404
         g.admin_business_id = business_id
         g.admin_principal = "operator_api_key"
-        # Audit trail (no secret material is logged).
         logger.info("Operator API key used for %s %s on business_id=%s", request.method, request.path, business_id)
+        record_audit(
+            action="admin.operator_key",
+            target_type="business",
+            target_id=str(business_id),
+            metadata={"method": request.method, "path": request.path},
+        )
         return None
 
     return jsonify({"error": "Unauthorized."}), 401

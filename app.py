@@ -1,19 +1,22 @@
 ﻿# AI Receptionist Flask App
 # Handles WhatsApp messages using Twilio and OpenAI
 
-from flask import Flask, g, request, render_template, url_for
+from flask import Flask, g, request, render_template
 from flask_wtf import CSRFProtect
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.request_validator import RequestValidator
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from werkzeug.exceptions import HTTPException
 import os
 import time
 import datetime
 import logging
 
+from apex.setup_django import setup_django
 from config import apply_config
-from database import init_database
+from database import get_session, init_database
 from services.booking_service import BookingService
 from services.business_service import BusinessService
 from services.ai_service import AIService
@@ -21,12 +24,15 @@ from services.conversation_service import ConversationService
 from services.jobs import enqueue_owner_notification, enqueue_booking_reminder
 from services.logging_setup import configure_logging
 from services.observability import init_sentry
+from apex_receptionist.adapters.twilio_webhook import is_valid_twilio_signature
+from apex_receptionist.models.processed_webhook import ProcessedWebhook
 from routes.admin import admin_bp
 from routes.auth import auth_bp, login_required, login_rate_limiter
 from routes.dashboard import dashboard_bp
 from routes.ops import ops_bp
 
 load_dotenv()
+setup_django()
 configure_logging()
 init_sentry()
 logger = logging.getLogger(__name__)
@@ -60,8 +66,6 @@ missing_env = [name for name, value in {
 if missing_env:
     raise RuntimeError(f"Missing required environment variables: {', '.join(missing_env)}")
 
-validator = RequestValidator(TWILIO_AUTH_TOKEN)
-
 # -----------------------------
 # Database initialisation
 # -----------------------------
@@ -93,11 +97,7 @@ conversation_service = ConversationService(
 # Twilio request validation
 # -----------------------------
 def is_valid_twilio_request():
-    signature = request.headers.get("X-Twilio-Signature", "")
-    if not signature:
-        return False
-    params = {k: v for k, v in request.form.items()}
-    return validator.validate(request.url, params, signature)
+    return is_valid_twilio_signature(request, TWILIO_AUTH_TOKEN, path="/whatsapp")
 
 
 def _mask(sender: str) -> str:
@@ -106,6 +106,29 @@ def _mask(sender: str) -> str:
         return "<unknown>"
     tail = sender[-4:]
     return f"***{tail}"
+
+
+def _already_processed(message_sid: str) -> bool:
+    if not message_sid:
+        return False
+    with get_session() as session:
+        found = session.scalar(
+            select(ProcessedWebhook.id).where(
+                ProcessedWebhook.provider == "twilio",
+                ProcessedWebhook.provider_message_id == message_sid,
+            )
+        )
+        return found is not None
+
+
+def _mark_processed(message_sid: str) -> None:
+    if not message_sid:
+        return
+    try:
+        with get_session() as session:
+            session.add(ProcessedWebhook(provider="twilio", provider_message_id=message_sid))
+    except IntegrityError:
+        return
 
 
 # -----------------------------
@@ -120,7 +143,6 @@ def _start_timer():
 def _log_request(response):
     start = getattr(g, "_start_time", None)
     latency_ms = round((time.perf_counter() - start) * 1000, 1) if start is not None else None
-    # Structured request log — no bodies, no PII beyond a masked business id.
     logger.info(
         "request completed",
         extra={
@@ -135,6 +157,14 @@ def _log_request(response):
     return response
 
 
+@app.errorhandler(Exception)
+def _unexpected_error(exc):
+    if isinstance(exc, HTTPException):
+        return exc
+    logger.exception("Unhandled application error")
+    return "An unexpected error occurred.", 500
+
+
 # -----------------------------
 # WhatsApp webhook
 # -----------------------------
@@ -147,10 +177,13 @@ def whatsapp():
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "").strip()
     recipient = request.values.get("To", "").strip()
+    message_sid = (request.values.get("MessageSid") or "").strip()
     if not incoming_msg:
         return "Message body is required", 400
     if not sender:
         return "Sender number is required", 400
+    if _already_processed(message_sid):
+        return str(MessagingResponse())
 
     # Route to the business that owns the inbound number. Never fall back to
     # another tenant when the number is unknown or missing.
@@ -159,12 +192,14 @@ def whatsapp():
         logger.warning("Inbound WhatsApp to unrecognized number %s from %s", _mask(recipient), _mask(sender))
         resp = MessagingResponse()
         resp.message("Sorry, we couldn't match this number to a business. Please double-check and try again.")
+        _mark_processed(message_sid)
         return str(resp)
 
     g.business_id = business.id
     reply = conversation_service.handle(business.id, sender, incoming_msg)
     resp = MessagingResponse()
     resp.message(reply)
+    _mark_processed(message_sid)
     logger.info(
         "Handled inbound WhatsApp",
         extra={"event": "whatsapp_inbound", "business_id": business.id, "outcome": "handled"},
@@ -197,10 +232,11 @@ def view_leads(admin):
 def enqueue_due_reminders():
     """Find bookings due for a reminder and hand each to the job system.
 
-    Actual delivery happens in the durable `send_booking_reminder` job and
-    depends on live Twilio credentials.
+    Appointment times are stored naive-UTC-or-local as today; comparison uses
+    timezone-aware UTC converted to naive UTC so reminder windows do not shift
+    with the host timezone.
     """
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     for booking in BookingService.bookings_due_for_reminder(now):
         enqueue_booking_reminder(booking.id)
 
@@ -217,7 +253,7 @@ def start_scheduler():
     so reminders are not scheduled once per web worker."""
     if not scheduler.running:
         scheduler.add_job(enqueue_due_reminders, "interval", minutes=60,
-                          next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=10))
+                          next_run_time=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(seconds=10))
         scheduler.start()
 
 

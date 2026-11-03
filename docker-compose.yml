@@ -27,6 +27,7 @@ services:
     build: .
     environment:
       APP_ENV: production
+      DJANGO_SETTINGS_MODULE: apex.settings
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       DATABASE_URL: postgresql://receptionist:${POSTGRES_PASSWORD:-receptionist}@postgres:5432/receptionist
       REDIS_URL: redis://redis:6379/0
@@ -49,6 +50,7 @@ services:
     command: ["python", "worker.py"]
     environment:
       APP_ENV: production
+      DJANGO_SETTINGS_MODULE: apex.settings
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       DATABASE_URL: postgresql://receptionist:${POSTGRES_PASSWORD:-receptionist}@postgres:5432/receptionist
       REDIS_URL: redis://redis:6379/0

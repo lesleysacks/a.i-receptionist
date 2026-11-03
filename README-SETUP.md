@@ -142,19 +142,15 @@ TWILIO_ACCOUNT_SID="your-account-sid-here"
 TWILIO_AUTH_TOKEN="your-auth-token-here"
 TWILIO_WHATSAPP_NUMBER="whatsapp:+14155238886"
 OWNER_PHONE_NUMBER="whatsapp:+your-phone-number"
+SECRET_KEY="replace-with-a-long-random-string"
 FLASK_DEBUG="false"
 PORT="5000"
 ```
 
-**Example:**
-```env
-TWILIO_ACCOUNT_SID="ACb86c999af3b4c027d84333f53b86a756"
-TWILIO_AUTH_TOKEN="682b5fa9be365e73613fc3793642f1ba"
-TWILIO_WHATSAPP_NUMBER="whatsapp:+14155238886"
-OWNER_PHONE_NUMBER="whatsapp:+27636628853"
-FLASK_DEBUG="false"
-PORT="5000"
-```
+Use obvious placeholders only. Never commit real Account SIDs, auth tokens, or API keys.
+If this repository previously contained credential-shaped examples, treat those
+values as compromised and rotate them in the Twilio console (and anywhere else
+they may have been used). Do not paste live secrets into documentation.
 
 3. **Save the file** (Ctrl+S)
 

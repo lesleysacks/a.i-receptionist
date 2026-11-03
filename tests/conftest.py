@@ -29,6 +29,13 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
 
 import pytest  # noqa: E402
 
+from apex.setup_django import setup_django  # noqa: E402
+
+setup_django()
+from django.core.management import call_command  # noqa: E402
+
+call_command("migrate", verbosity=0, interactive=False)
+
 import models  # noqa: E402,F401  (registers all tables on Base.metadata)
 from database import Base, engine, get_session  # noqa: E402
 from models.business import Business  # noqa: E402
@@ -45,6 +52,14 @@ def reset_db():
 
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    from apps.accounts.models import User
+    from apps.audit.models import AuditEvent
+    from apps.tenants.models import Membership, Tenant
+
+    AuditEvent.objects.all().delete()
+    Membership.objects.all().delete()
+    Tenant.objects.all().delete()
+    User.objects.all().delete()
     app_module = sys.modules.get("app")
     if app_module is not None:
         app_module.login_rate_limiter.reset()
@@ -71,7 +86,12 @@ def make_business():
             for question, answer in faqs or []:
                 session.add(FAQ(business_id=business.id, question=question, answer=answer))
             session.flush()
-            return business.id
+            business_id = business.id
+            business_name = business.name
+        from apps.tenants.services import ensure_tenant_for_business
+
+        ensure_tenant_for_business(business_id, business_name)
+        return business_id
 
     return _make
 

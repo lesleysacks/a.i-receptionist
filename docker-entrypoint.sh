@@ -23,6 +23,8 @@ PY
 if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
   echo "Running database migrations (alembic upgrade head)..."
   alembic upgrade head
+  echo "Running Django migrations..."
+  python manage.py migrate --noinput
 fi
 
 exec "$@"

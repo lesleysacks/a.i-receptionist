@@ -1,11 +1,37 @@
 """Production WSGI entry point.
 
-Run with Gunicorn:  gunicorn -c gunicorn.conf.py wsgi:app
+Gunicorn:  gunicorn -c gunicorn.conf.py wsgi:app
 
-Importing this module does not start the in-process dev scheduler or the Flask
-dev server (those only run under ``python app.py``).
+Flask serves the receptionist webhook, dashboard, and ops endpoints.
+Django serves /accounts/ and /platform/.
 """
 
-from app import app  # noqa: F401
+from __future__ import annotations
 
-__all__ = ["app"]
+import os
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "apex.settings")
+
+from app import app as flask_app  # noqa: E402
+from apex.wsgi import application as django_app  # noqa: E402
+
+FLASK_PREFIXES = (
+    "/whatsapp",
+    "/leads",
+    "/admin",
+    "/dashboard",
+    "/login",
+    "/logout",
+    "/health",
+    "/ready",
+)
+
+
+def app(environ, start_response):
+    path = environ.get("PATH_INFO") or ""
+    if path == "/" or any(path == prefix or path.startswith(prefix + "/") for prefix in FLASK_PREFIXES):
+        return flask_app(environ, start_response)
+    return django_app(environ, start_response)
+
+
+__all__ = ["app", "flask_app"]

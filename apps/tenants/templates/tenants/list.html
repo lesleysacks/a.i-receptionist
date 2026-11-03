@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Apex tenants</title>
+</head>
+<body>
+  <h1>Tenants</h1>
+  <ul>
+    {% for tenant in tenants %}
+      <li>{{ tenant.name }} ({{ tenant.slug }}) — {{ tenant.status }} / {{ tenant.service_mode }}</li>
+    {% empty %}
+      <li>No tenants.</li>
+    {% endfor %}
+  </ul>
+</body>
+</html>

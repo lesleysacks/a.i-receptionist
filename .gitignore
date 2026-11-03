@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+staticfiles/
+*.sqlite3

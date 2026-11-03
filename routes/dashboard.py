@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
-from routes.auth import login_required
+from routes.auth import login_required, write_required
 from services.business_service import BusinessService, NotFoundError, ValidationError
 
 dashboard_bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
@@ -41,6 +41,7 @@ def services(admin):
 
 @dashboard_bp.route("/services/new", methods=["GET", "POST"])
 @login_required
+@write_required
 def service_new(admin):
     business = _business(admin)
     if request.method == "POST":
@@ -55,6 +56,7 @@ def service_new(admin):
 
 @dashboard_bp.route("/services/<int:service_id>/edit", methods=["GET", "POST"])
 @login_required
+@write_required
 def service_edit(admin, service_id):
     business = _business(admin)
     services_list = {s.id: s for s in BusinessService.get_services(admin.business_id)}
@@ -74,6 +76,7 @@ def service_edit(admin, service_id):
 
 @dashboard_bp.post("/services/<int:service_id>/delete")
 @login_required
+@write_required
 def service_delete(admin, service_id):
     try:
         BusinessService.delete_service(admin.business_id, service_id)
@@ -106,6 +109,7 @@ def faqs(admin):
 
 @dashboard_bp.route("/faqs/new", methods=["GET", "POST"])
 @login_required
+@write_required
 def faq_new(admin):
     business = _business(admin)
     if request.method == "POST":
@@ -120,6 +124,7 @@ def faq_new(admin):
 
 @dashboard_bp.route("/faqs/<int:faq_id>/edit", methods=["GET", "POST"])
 @login_required
+@write_required
 def faq_edit(admin, faq_id):
     business = _business(admin)
     faqs_list = {f.id: f for f in BusinessService.get_faq(admin.business_id)}
@@ -139,6 +144,7 @@ def faq_edit(admin, faq_id):
 
 @dashboard_bp.post("/faqs/<int:faq_id>/delete")
 @login_required
+@write_required
 def faq_delete(admin, faq_id):
     try:
         BusinessService.delete_faq(admin.business_id, faq_id)
@@ -160,6 +166,7 @@ def _faq_form() -> dict:
 # -- Business settings --------------------------------------------------------
 @dashboard_bp.route("/business", methods=["GET", "POST"])
 @login_required
+@write_required
 def business(admin):
     if request.method == "POST":
         data = {

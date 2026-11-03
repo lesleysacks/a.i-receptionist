@@ -41,6 +41,9 @@ class BaseConfig:
     # CSRF (Flask-WTF)
     WTF_CSRF_ENABLED = True
 
+    # Reject oversized payloads (Twilio webhooks and admin JSON are small).
+    MAX_CONTENT_LENGTH = _int("MAX_CONTENT_LENGTH", 64 * 1024)
+
     # Login abuse protection
     LOGIN_MAX_ATTEMPTS = 5
     LOGIN_WINDOW_SECONDS = 300
@@ -100,3 +103,4 @@ def apply_config(app) -> None:
     app.config["LOGIN_MAX_ATTEMPTS"] = _int("LOGIN_MAX_ATTEMPTS", app.config["LOGIN_MAX_ATTEMPTS"])
     app.config["LOGIN_WINDOW_SECONDS"] = _int("LOGIN_WINDOW_SECONDS", app.config["LOGIN_WINDOW_SECONDS"])
     app.config["LOGIN_LOCKOUT_SECONDS"] = _int("LOGIN_LOCKOUT_SECONDS", app.config["LOGIN_LOCKOUT_SECONDS"])
+    app.config["MAX_CONTENT_LENGTH"] = _int("MAX_CONTENT_LENGTH", app.config.get("MAX_CONTENT_LENGTH", 64 * 1024))

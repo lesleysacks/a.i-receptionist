@@ -37,6 +37,7 @@ jobs:
       DATABASE_URL: postgresql://receptionist:receptionist@localhost:5432/receptionist
       REDIS_URL: redis://localhost:6379/0
       SECRET_KEY: ci-secret-key
+      DJANGO_SETTINGS_MODULE: apex.settings
       TWILIO_ACCOUNT_SID: ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
       TWILIO_AUTH_TOKEN: ci_placeholder_token
       # OPENAI_API_KEY / real Twilio creds are intentionally absent:
@@ -56,7 +57,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Apply migrations (PostgreSQL)
-        run: alembic upgrade head
+        run: |
+          alembic upgrade head
+          python manage.py migrate --noinput
 
       - name: Run tests
         run: python -m pytest

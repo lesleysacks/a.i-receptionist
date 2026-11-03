@@ -47,14 +47,11 @@ def test_logout_revokes_access(make_business, make_admin, app_client):
 
 
 def test_password_is_not_stored_in_plaintext(make_business, make_admin):
-    from sqlalchemy import select
-
-    from database import get_session
-    from models.admin_user import AdminUser
+    from apps.accounts.models import User
 
     business_id = make_business(name="Business A")
     email, password = make_admin(business_id)
-    with get_session() as session:
-        admin = session.scalar(select(AdminUser).where(AdminUser.email == email))
-    assert admin.password_hash != password
-    assert password not in admin.password_hash
+    user = User.objects.get(email=email)
+    assert user.password != password
+    assert password not in user.password
+    assert user.check_password(password)
