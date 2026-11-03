@@ -1,13 +1,17 @@
 [
   {
     "default": {
-      "business_name": "Generative A.I",
-      "about": "Industrial automation company specialising in PLC programming, factory automation and conveyor systems.",
+      "business_name": "Example Automation Co",
+      "about": "Sample industrial automation profile used only as documentation leftover. The running app reads SQLAlchemy Business rows, not this file.",
       "services": [
         "PLC Programming",
         "Factory Automation",
         "Conveyor Systems"
       ],
       "contact": {
-        "phone": "+27843252262",
-        "email": "lesleysacks1@gmail.com"
+        "phone": "+27000000000",
+        "email": "owner@example.com"
+      }
+    }
+  }
+]

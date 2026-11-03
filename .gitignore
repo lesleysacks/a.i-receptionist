@@ -2,3 +2,7 @@
 *.db
 __pycache__/
 *.pyc
+.venv/
+venv/
+staticfiles/
+*.sqlite3

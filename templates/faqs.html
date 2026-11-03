@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}FAQs{% endblock %}
+{% block body %}
+<h1>FAQs</h1>
+<p><a class="btn" href="{{ url_for('dashboard.faq_new') }}">+ New FAQ</a></p>
+{% if faqs %}
+<table>
+  <tr><th>Question</th><th>Answer</th><th>Category</th><th>Priority</th><th>Actions</th></tr>
+  {% for f in faqs %}
+  <tr>
+    <td>{{ f.question }}</td>
+    <td>{{ f.answer }}</td>
+    <td>{{ f.category or '—' }}</td>
+    <td>{{ f.priority }}</td>
+    <td>
+      <a href="{{ url_for('dashboard.faq_edit', faq_id=f.id) }}">Edit</a>
+      <form class="inline" method="post" action="{{ url_for('dashboard.faq_delete', faq_id=f.id) }}"
+            onsubmit="return confirm('Delete this FAQ?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No FAQs yet.</p>
+{% endif %}
+{% endblock %}

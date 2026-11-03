@@ -1,11 +1,31 @@
-"""SQLAlchemy models for the multi-tenant receptionist platform."""
+"""Compatibility shims for SQLAlchemy models.
 
-from models.business import Business
-from models.booking import Booking
-from models.conversation import Conversation
-from models.customer import Customer
-from models.knowledge_document import KnowledgeDocument
-from models.service import Service
-from models.faq import FAQ
+Canonical definitions live in ``apex_receptionist.models``.
+"""
 
-__all__ = ["Business", "Booking", "Conversation", "Customer", "KnowledgeDocument", "Service", "FAQ"]
+from apex_receptionist.models import *  # noqa: F403
+from apex_receptionist.models import (  # noqa: F401
+    AdminUser,
+    Booking,
+    Business,
+    Conversation,
+    ConversationState,
+    Customer,
+    FAQ,
+    KnowledgeDocument,
+    ProcessedWebhook,
+    Service,
+)
+
+__all__ = [
+    "Business",
+    "Booking",
+    "Conversation",
+    "ConversationState",
+    "Customer",
+    "KnowledgeDocument",
+    "Service",
+    "FAQ",
+    "AdminUser",
+    "ProcessedWebhook",
+]

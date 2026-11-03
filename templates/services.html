@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Services{% endblock %}
+{% block body %}
+<h1>Services</h1>
+<p><a class="btn" href="{{ url_for('dashboard.service_new') }}">+ New service</a></p>
+{% if services %}
+<table>
+  <tr><th>Name</th><th>Price</th><th>Duration (min)</th><th>Active</th><th>Actions</th></tr>
+  {% for s in services %}
+  <tr>
+    <td>{{ s.name }}</td>
+    <td>{{ '%.2f'|format(s.price) if s.price is not none else '—' }}</td>
+    <td>{{ s.duration_minutes if s.duration_minutes is not none else '—' }}</td>
+    <td>{{ 'Yes' if s.active else 'No' }}</td>
+    <td>
+      <a href="{{ url_for('dashboard.service_edit', service_id=s.id) }}">Edit</a>
+      <form class="inline" method="post" action="{{ url_for('dashboard.service_delete', service_id=s.id) }}"
+            onsubmit="return confirm('Delete this service?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Delete</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No services yet.</p>
+{% endif %}
+{% endblock %}

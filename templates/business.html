@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Business settings{% endblock %}
+{% block body %}
+<h1>Business settings</h1>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label for="name">Business name</label>
+  <input id="name" type="text" name="name" value="{{ business.name }}" required>
+  <label for="whatsapp_number">WhatsApp number</label>
+  <input id="whatsapp_number" type="text" name="whatsapp_number"
+         value="{{ business.whatsapp_number or '' }}" placeholder="whatsapp:+27111111111">
+  <label for="phone">Contact phone</label>
+  <input id="phone" type="text" name="phone" value="{{ business.phone or '' }}">
+  <label for="email">Contact email</label>
+  <input id="email" type="email" name="email" value="{{ business.email or '' }}">
+  <label for="city">City</label>
+  <input id="city" type="text" name="city" value="{{ business.city or '' }}">
+  <label><input type="checkbox" name="booking_enabled" {{ 'checked' if business.booking_enabled else '' }}> Booking enabled</label>
+  <button type="submit">Save</button>
+</form>
+{% endblock %}

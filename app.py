@@ -1,37 +1,63 @@
 ﻿# AI Receptionist Flask App
 # Handles WhatsApp messages using Twilio and OpenAI
 
-from flask import Flask, request, render_template_string
+from flask import Flask, g, request, render_template
+from flask_wtf import CSRFProtect
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client
-from twilio.request_validator import RequestValidator
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from werkzeug.exceptions import HTTPException
 import os
+import time
 import datetime
 import logging
 
-from database import init_database
+from apex.setup_django import setup_django
+from config import apply_config
+from database import get_session, init_database
 from services.booking_service import BookingService
 from services.business_service import BusinessService
 from services.ai_service import AIService
+from services.conversation_service import ConversationService
+from services.jobs import enqueue_owner_notification, enqueue_booking_reminder
+from services.logging_setup import configure_logging
+from services.observability import init_sentry
+from apex_receptionist.adapters.twilio_webhook import is_valid_twilio_signature
+from apex_receptionist.models.processed_webhook import ProcessedWebhook
 from routes.admin import admin_bp
+from routes.auth import auth_bp, login_required, login_rate_limiter
+from routes.dashboard import dashboard_bp
+from routes.ops import ops_bp
 
 load_dotenv()
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+setup_django()
+configure_logging()
+init_sentry()
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
+
+# Environment-aware config (debug, session/cookie hardening, CSRF, secret key).
+apply_config(app)
+
+# CSRF protection for browser/session forms. The Twilio webhook and the JSON
+# admin API (session- or API-key-authenticated machine clients) are exempted
+# below so they keep their own auth mechanisms.
+csrf = CSRFProtect(app)
+
+app.register_blueprint(ops_bp)
+csrf.exempt(ops_bp)
 app.register_blueprint(admin_bp)
+csrf.exempt(admin_bp)
+app.register_blueprint(auth_bp)
+app.register_blueprint(dashboard_bp)
 
 # -----------------------------
-# Twilio credentials
+# Twilio credentials (for webhook signature validation)
 # -----------------------------
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886"))
-OWNER_PHONE_NUMBER = os.getenv("OWNER_PHONE_NUMBER")
 
 missing_env = [name for name, value in {
     "TWILIO_ACCOUNT_SID": TWILIO_ACCOUNT_SID,
@@ -40,199 +66,154 @@ missing_env = [name for name, value in {
 if missing_env:
     raise RuntimeError(f"Missing required environment variables: {', '.join(missing_env)}")
 
-client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-validator = RequestValidator(TWILIO_AUTH_TOKEN)
-users = {}
-
 # -----------------------------
 # Database initialisation
 # -----------------------------
 init_database()
-ai_service = AIService()
 
 
-def current_business():
-    """Resolve the default tenant afresh so admin edits apply immediately."""
-    return BusinessService.get_default_business()
+def notify_owner(business, booking):
+    """Hand owner notification to the background job system (never blocks booking).
+
+    The booking is already persisted at this point; enqueue failures are logged
+    but never propagate, so a customer's booking never depends on notification.
+    """
+    outcome = enqueue_owner_notification(booking.id)
+    logger.info(
+        "Owner notification dispatched",
+        extra={"event": "owner_notify_dispatch", "booking_id": booking.id,
+               "business_id": business.id, "outcome": outcome},
+    )
+
+
+# The conversation service owns the booking finite-state machine and AI routing.
+conversation_service = ConversationService(
+    ai_service=AIService(),
+    notifier=notify_owner,
+)
+
 
 # -----------------------------
 # Twilio request validation
 # -----------------------------
 def is_valid_twilio_request():
-    signature = request.headers.get("X-Twilio-Signature", "")
-    if not signature:
-        return False
-    params = {k: v for k, v in request.form.items()}
-    return validator.validate(request.url, params, signature)
-
-# -----------------------------
-# Booking helpers
-# -----------------------------
-def parse_datetime(value):
-    value = value.strip()
-    formats = [
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d %I:%M %p",
-        "%d/%m/%Y %H:%M",
-        "%d/%m/%Y %I:%M %p",
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-    ]
-    for fmt in formats:
-        try:
-            parsed = datetime.datetime.strptime(value, fmt)
-            if fmt in ["%Y-%m-%d", "%d/%m/%Y"]:
-                return parsed.replace(hour=9, minute=0)
-            return parsed
-        except ValueError:
-            continue
-    return None
+    return is_valid_twilio_signature(request, TWILIO_AUTH_TOKEN, path="/whatsapp")
 
 
-def reset_user(sender):
-    users[sender] = {"step": "start", "updated": datetime.datetime.now().isoformat()}
-
-
-def save_booking(name, date, phone, message):
-    booking = BookingService.create_booking(
-        current_business().id,
-        name,
-        datetime.datetime.strptime(date, "%Y-%m-%d %H:%M"),
-        phone,
-        message,
-    )
-    lead = {
-        "name": booking.customer.name,
-        "date": booking.appointment_at.strftime("%Y-%m-%d %H:%M"),
-        "phone": booking.customer.phone,
-        "message": booking.service,
-        "time": booking.created_at.strftime("%Y-%m-%d %H:%M"),
-    }
-    print("NEW LEAD:", lead)
-    notify_owner(lead, current_business().owner_phone or OWNER_PHONE_NUMBER)
-
-
-def notify_owner(lead, owner_phone):
-    if not owner_phone:
-        print("Owner notification skipped: no owner phone number is configured.")
-        return
-    text = f"""
-📩 New WhatsApp Booking!
-
-Name: {lead['name']}
-Phone: {lead['phone']}
-Date: {lead['date']}
-Service: {lead['message']}
-Time: {lead['time']}
-"""
-    try:
-        client.messages.create(
-            from_=TWILIO_PHONE_NUMBER,
-            body=text,
-            to=owner_phone,
-        )
-        print("Owner notified ✅")
-    except Exception as exc:
-        print("Failed to notify owner:", exc)
-
-
-def ai_generate(message, sender):
-    """Route booking-form messages or free-form questions through AIService."""
+def _mask(sender: str) -> str:
+    """Mask a phone/identifier for logging so we never log full customer numbers."""
     if not sender:
-        return "Unable to read your phone number. Please send your message again."
-    message = (message or "").strip()
-    if sender not in users:
-        reset_user(sender)
+        return "<unknown>"
+    tail = sender[-4:]
+    return f"***{tail}"
 
-    step = users[sender]["step"]
-    if step == "ask_name":
-        users[sender]["name"] = message
-        users[sender]["step"] = "ask_date"
-        reply = f"Thanks {message}! What date would you like to book? (e.g. 2025-09-30 14:30)"
-        ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-        return reply
 
-    if step == "ask_date":
-        parsed_date = parse_datetime(message)
-        if not parsed_date:
-            reply = "Please send a valid date and time in one of these formats: YYYY-MM-DD HH:MM or DD/MM/YYYY HH:MM."
-            ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-            return reply
-        users[sender]["date"] = parsed_date.strftime("%Y-%m-%d %H:%M")
-        users[sender]["step"] = "ask_service"
-        reply = "Great. What service do you need for your booking?"
-        ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-        return reply
+def _already_processed(message_sid: str) -> bool:
+    if not message_sid:
+        return False
+    with get_session() as session:
+        found = session.scalar(
+            select(ProcessedWebhook.id).where(
+                ProcessedWebhook.provider == "twilio",
+                ProcessedWebhook.provider_message_id == message_sid,
+            )
+        )
+        return found is not None
 
-    if step == "ask_service":
-        users[sender]["service"] = message
-        save_booking(users[sender]["name"], users[sender]["date"], sender, message)
-        users[sender]["step"] = "done"
-        reply = f"""
-✅ Booking request received!
 
-Name: {users[sender]['name']}
-Date: {users[sender]['date']}
-Service: {message}
+def _mark_processed(message_sid: str) -> None:
+    if not message_sid:
+        return
+    try:
+        with get_session() as session:
+            session.add(ProcessedWebhook(provider="twilio", provider_message_id=message_sid))
+    except IntegrityError:
+        return
 
-A consultant will contact you shortly.
-"""
-        ai_service.record_booking_exchange(current_business().id, sender, message, reply)
-        return reply
 
-    result = ai_service.respond(current_business().id, sender, message)
-    if result.action == "start_booking" and current_business().booking_enabled:
-        reset_user(sender)
-        users[sender]["step"] = "ask_name"
-    return result.message
+# -----------------------------
+# Request/performance logging
+# -----------------------------
+@app.before_request
+def _start_timer():
+    g._start_time = time.perf_counter()
+
+
+@app.after_request
+def _log_request(response):
+    start = getattr(g, "_start_time", None)
+    latency_ms = round((time.perf_counter() - start) * 1000, 1) if start is not None else None
+    logger.info(
+        "request completed",
+        extra={
+            "event": "request",
+            "method": request.method,
+            "path": request.path,
+            "status": response.status_code,
+            "latency_ms": latency_ms,
+            "business_id": getattr(g, "business_id", None),
+        },
+    )
+    return response
+
+
+@app.errorhandler(Exception)
+def _unexpected_error(exc):
+    if isinstance(exc, HTTPException):
+        return exc
+    logger.exception("Unhandled application error")
+    return "An unexpected error occurred.", 500
+
 
 # -----------------------------
 # WhatsApp webhook
 # -----------------------------
 @app.route("/whatsapp", methods=["POST"])
+@csrf.exempt
 def whatsapp():
     if not is_valid_twilio_request():
         return "Invalid request", 403
 
     incoming_msg = request.values.get("Body", "").strip()
     sender = request.values.get("From", "").strip()
+    recipient = request.values.get("To", "").strip()
+    message_sid = (request.values.get("MessageSid") or "").strip()
     if not incoming_msg:
         return "Message body is required", 400
     if not sender:
         return "Sender number is required", 400
+    if _already_processed(message_sid):
+        return str(MessagingResponse())
 
-    reply = ai_generate(incoming_msg, sender)
+    # Route to the business that owns the inbound number. Never fall back to
+    # another tenant when the number is unknown or missing.
+    business = BusinessService.get_by_whatsapp_number(recipient) if recipient else None
+    if business is None:
+        logger.warning("Inbound WhatsApp to unrecognized number %s from %s", _mask(recipient), _mask(sender))
+        resp = MessagingResponse()
+        resp.message("Sorry, we couldn't match this number to a business. Please double-check and try again.")
+        _mark_processed(message_sid)
+        return str(resp)
+
+    g.business_id = business.id
+    reply = conversation_service.handle(business.id, sender, incoming_msg)
     resp = MessagingResponse()
     resp.message(reply)
-    print(f"{sender}: {incoming_msg} -> {reply}")
+    _mark_processed(message_sid)
+    logger.info(
+        "Handled inbound WhatsApp",
+        extra={"event": "whatsapp_inbound", "business_id": business.id, "outcome": "handled"},
+    )
     return str(resp)
+
 
 # -----------------------------
 # Leads dashboard
 # -----------------------------
 @app.route("/leads")
-def view_leads():
-    html = """
-    <h1>WhatsApp Leads Dashboard</h1>
-    <table border="1" cellpadding="10">
-        <tr>
-            <th>Name</th>
-            <th>Phone</th>
-            <th>Date</th>
-            <th>Service</th>
-            <th>Time</th>
-        </tr>
-        {% for lead in leads %}
-        <tr>
-            <td>{{ lead.name }}</td>
-            <td>{{ lead.phone }}</td>
-            <td>{{ lead.date }}</td>
-            <td>{{ lead.message }}</td>
-            <td>{{ lead.time }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    """
+@login_required
+def view_leads(admin):
+    business = BusinessService.get_business(admin.business_id)
     leads = [
         {
             "name": booking.customer.name,
@@ -241,26 +222,23 @@ def view_leads():
             "message": booking.service,
             "time": booking.created_at.strftime("%Y-%m-%d %H:%M"),
         }
-        for booking in BookingService.list_bookings()
+        for booking in BookingService.list_bookings(admin.business_id)
     ]
-    return render_template_string(html, leads=leads)
+    return render_template("leads.html", admin=admin, business=business, leads=leads)
 
 # -----------------------------
-# Reminders
+# Reminders (foundation)
 # -----------------------------
-def send_reminders():
-    now = datetime.datetime.now()
+def enqueue_due_reminders():
+    """Find bookings due for a reminder and hand each to the job system.
+
+    Appointment times are stored naive-UTC-or-local as today; comparison uses
+    timezone-aware UTC converted to naive UTC so reminder windows do not shift
+    with the host timezone.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     for booking in BookingService.bookings_due_for_reminder(now):
-        text = (
-            f"Hello {booking.customer.name}, this is a reminder for your appointment on "
-            f"{booking.appointment_at:%Y-%m-%d %H:%M} for {booking.service}."
-        )
-        try:
-            client.messages.create(from_=TWILIO_PHONE_NUMBER, body=text, to=booking.customer.phone)
-            BookingService.mark_reminder_sent(booking.id)
-            print(f"Reminder sent to {booking.customer.name} ✅")
-        except Exception as exc:
-            print("Failed to send reminder:", exc)
+        enqueue_booking_reminder(booking.id)
 
 
 @app.route("/")
@@ -271,8 +249,11 @@ def home():
 scheduler = BackgroundScheduler()
 
 def start_scheduler():
+    """Dev-only in-process scheduler. Under Gunicorn use a dedicated worker/beat
+    so reminders are not scheduled once per web worker."""
     if not scheduler.running:
-        scheduler.add_job(send_reminders, "interval", minutes=60, next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=10))
+        scheduler.add_job(enqueue_due_reminders, "interval", minutes=60,
+                          next_run_time=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) + datetime.timedelta(seconds=10))
         scheduler.start()
 
 
