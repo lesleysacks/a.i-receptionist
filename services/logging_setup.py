@@ -16,6 +16,7 @@ import os
 _ALLOWED_EXTRA = {
     "event", "method", "path", "status", "latency_ms",
     "business_id", "booking_id", "outcome", "client",
+    "intent", "classification_method", "response_type", "ai_required",
 }
 
 _BASE_RECORD_KEYS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()) | {"message", "asctime", "taskName"}

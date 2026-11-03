@@ -77,7 +77,10 @@ Do this only on disposable environments.
 `python receptionist_cli.py create-admin` or
 `python manage.py create_platform_admin`.
 
-## Known limitations (Phase 2+)
+Idle WhatsApp questions now use the Phase 2.1 response pipeline
+(`docs/apex-phase-2-1-intelligence-foundation.md`) before the OpenAI seam.
+
+## Known limitations (later phases)
 
 - Flask and Django still use separate session cookies.
 - One shared Twilio/OpenAI credential set for all tenants.

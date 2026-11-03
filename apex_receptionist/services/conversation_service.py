@@ -1,10 +1,12 @@
 """Conversation orchestration for the WhatsApp receptionist.
 
-Implements a small, explicit finite-state machine for the booking flow and
-delegates free-form questions to the AI seam. Conversation state is persisted
-through a pluggable store so a booking can resume after a restart. All
-customer-facing failures are converted into safe, friendly messages; internal
-errors are logged for developers but never surfaced to the customer.
+Implements a small, explicit finite-state machine for the booking flow.
+Idle messages go through the code-first response pipeline first; the AI seam
+is used only when the pipeline cannot answer from approved tenant facts.
+Conversation state is persisted through a pluggable store so a booking can
+resume after a restart. All customer-facing failures are converted into safe,
+friendly messages; internal errors are logged for developers but never
+surfaced to the customer.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ from sqlalchemy import select
 
 from database import get_session
 from apex_receptionist.models.conversation_state import ConversationState
+from apex_receptionist.intelligence.pipeline import ResponsePipeline
+from apex_receptionist.intelligence.types import PipelineDecision
 from apex_receptionist.services import validators
 from apex_receptionist.services.ai_service import AIService
 from apex_receptionist.services.booking_service import BookingService
@@ -116,8 +120,10 @@ class ConversationService:
         state_store: dict | None = None,
         store: InMemoryStateStore | DbStateStore | None = None,
         notifier: Callable[[object, object], None] | None = None,
+        response_pipeline: ResponsePipeline | None = None,
     ) -> None:
         self.ai_service = ai_service or AIService()
+        self.response_pipeline = response_pipeline or ResponsePipeline()
         if store is not None:
             self.store = store
         elif state_store is not None:
@@ -199,11 +205,14 @@ class ConversationService:
 
     # -- individual steps ---------------------------------------------------
     def _handle_idle(self, business, business_id, sender, state, message) -> tuple[str, bool]:
-        if business.booking_enabled and validators.is_booking_intent(message):
+        outcome = self.response_pipeline.decide(business, message)
+        if outcome.decision == PipelineDecision.START_BOOKING:
             state.step = ASK_NAME
             return "Happy to help you book! What name should the booking be under?", False
+        if outcome.decision in {PipelineDecision.DETERMINISTIC, PipelineDecision.HANDOFF}:
+            return outcome.message or self._booking_disabled_reply(), False
 
-        # Free-form question: delegate to the AI seam (records the exchange itself).
+        # Unclassified idle message: optional AI seam (records the exchange itself).
         result = self.ai_service.respond(business_id, sender, message)
         if result.action == "start_booking" and business.booking_enabled:
             state.step = ASK_NAME

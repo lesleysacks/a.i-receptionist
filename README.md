@@ -8,6 +8,7 @@ can book appointments through a guided, durable conversation.
 > Setup: [`docs/apex-local-development.md`](docs/apex-local-development.md).
 > Phase 0 audit: [`docs/apex-phase-0-architecture-audit.md`](docs/apex-phase-0-architecture-audit.md).
 > Phase 1 notes: [`docs/apex-phase-1-implementation.md`](docs/apex-phase-1-implementation.md).
+> Phase 2.1 intelligence: [`docs/apex-phase-2-1-intelligence-foundation.md`](docs/apex-phase-2-1-intelligence-foundation.md).
 > Security: [`docs/apex-security.md`](docs/apex-security.md).
 
 ---
@@ -15,8 +16,8 @@ can book appointments through a guided, durable conversation.
 ## Architecture
 
 ```
-Inbound WhatsApp ──"To" number──▶ Business (tenant) ──▶ Conversation FSM ──▶ Booking ──▶ Lead
-                    (routing)         (isolation)        (durable state)     (idempotent)
+Inbound WhatsApp ──"To" number──▶ Business (tenant) ──▶ Idle pipeline (facts first, AI if needed)
+                    (routing)         (isolation)        └── Booking FSM when the customer wants to book
 
 Admin ──login (session + CSRF)──▶ Dashboard ──scoped to──▶ Business ──▶ its Services / FAQs / Leads only
 Operator ──ADMIN_API_KEY + X-Business-Id──▶ JSON /admin API (explicit tenant targeting)
@@ -69,6 +70,7 @@ alembic revision --autogenerate -m "describe change"   # create a new migration
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio credentials; the auth token validates webhook signatures. |
 | `TWILIO_WHATSAPP_NUMBER` / `OWNER_PHONE_NUMBER` | No | Outbound sender and fallback owner-notification number. |
 | `OPENAI_API_KEY` | No | Enables live AI answers; without it, answers fall back safely. |
+| `APEX_AI_ENABLED` | No | `false` skips the model for unknown idle questions (deterministic handoff). Default on. |
 | `OPENAI_MODEL` / `OPENAI_TIMEOUT` | No | Chat model (default `gpt-4.1-mini`) and request timeout seconds (default `15`). |
 | `ADMIN_API_KEY` | No | Operator-level key for the JSON `/admin` API (must send `X-Business-Id`). |
 | `REDIS_URL` | No | Enables Redis-backed distributed rate limiting and RQ background jobs (e.g. `redis://redis:6379/0`). Without it, jobs run inline and rate limiting is process-local. |

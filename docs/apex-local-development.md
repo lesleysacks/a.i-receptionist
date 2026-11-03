@@ -22,6 +22,7 @@ export DJANGO_SETTINGS_MODULE=apex.settings
 # optional
 export DATABASE_URL=sqlite:///receptionist.db
 export WEBHOOK_BASE_URL=https://your-public-host.example
+# export APEX_AI_ENABLED=false   # optional: never call OpenAI for unknown questions
 ```
 
 ## Migrations
