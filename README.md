@@ -170,7 +170,7 @@ python worker.py
 
 ## Observability
 
-- `GET /health` — liveness; returns `{"status":"ok"}` and never touches the DB.
+- `GET /health` — Django liveness; returns `{"status":"ok"}` and never touches the DB. `/ready` remains Flask.
 - `GET /ready` — readiness; checks PostgreSQL (and Redis when configured); returns
   503 when a dependency is down.
 - **Structured JSON logs** (`LOG_FORMAT=json`) with per-request timing

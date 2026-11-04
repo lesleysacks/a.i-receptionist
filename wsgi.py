@@ -2,8 +2,8 @@
 
 Gunicorn:  gunicorn -c gunicorn.conf.py wsgi:app
 
-Flask serves the receptionist webhook, dashboard, and ops endpoints.
-Django serves /accounts/ and /platform/.
+Flask serves the receptionist webhook, dashboard, JSON /admin, and /ready.
+Django serves /health, /accounts/, and /platform/.
 """
 
 from __future__ import annotations

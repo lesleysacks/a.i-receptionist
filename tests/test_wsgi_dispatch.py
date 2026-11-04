@@ -96,9 +96,8 @@ def test_leads_dashboard_admin_and_ops_paths_go_to_flask_only():
         "/login",
         "/login/",
         "/logout",
-        "/health",
-        "/health/",
         "/ready",
+        "/ready/",
     )
     for path in flask_paths:
         flask_app, django_app, body = _dispatch(path)
@@ -119,6 +118,9 @@ def test_accounts_and_platform_paths_go_to_django_only():
         "/platform/django-admin/",
         "/platform/django-admin/login/",
         "/static/admin/css/base.css",
+        "/health",
+        "/health/",
+        "/health/something",
     )
     for path in django_paths:
         flask_app, django_app, body = _dispatch(path)
@@ -161,6 +163,7 @@ def test_trailing_slash_does_not_change_framework_owner():
         ("/leads", "/leads/"),
         ("/dashboard", "/dashboard/"),
         ("/admin", "/admin/"),
+        ("/ready", "/ready/"),
         ("/health", "/health/"),
         ("/accounts", "/accounts/"),
         ("/platform", "/platform/"),
@@ -249,8 +252,64 @@ def test_wsgi_app_callable_uses_the_same_prefix_rules(monkeypatch):
 
     list(wsgi.app(_environ("/whatsapp", method="POST"), start_response))
     list(wsgi.app(_environ("/accounts/login/"), start_response))
+    list(wsgi.app(_environ("/health"), start_response))
+    list(wsgi.app(_environ("/ready"), start_response))
 
-    assert [call["PATH_INFO"] for call in flask_app.calls] == ["/whatsapp"]
-    assert [call["PATH_INFO"] for call in django_app.calls] == ["/accounts/login/"]
+    assert [call["PATH_INFO"] for call in flask_app.calls] == ["/whatsapp", "/ready"]
+    assert [call["PATH_INFO"] for call in django_app.calls] == ["/accounts/login/", "/health"]
     assert django_app.calls[0]["REQUEST_METHOD"] == "GET"
     assert flask_app.calls[0]["REQUEST_METHOD"] == "POST"
+    assert flask_app.calls[1]["REQUEST_METHOD"] == "GET"
+    assert django_app.calls[1]["REQUEST_METHOD"] == "GET"
+
+
+def test_health_is_django_and_other_receptionist_paths_stay_flask():
+    django_only = ("/health", "/health/", "/health/something", "/accounts", "/platform")
+    flask_only = ("/ready", "/whatsapp", "/leads", "/admin", "/dashboard", "/login", "/logout", "/")
+    for path in django_only:
+        flask_app, django_app, body = _dispatch(path)
+        assert flask_app.calls == [], path
+        assert body == [b"django"]
+        assert flask_owns_path(path) is False
+    for path in flask_only:
+        flask_app, django_app, body = _dispatch(path)
+        assert django_app.calls == [], path
+        assert body == [b"flask"]
+        assert flask_owns_path(path) is True
+
+
+def test_health_dispatch_preserves_method_query_headers_and_body():
+    flask_app, django_app, _body = _dispatch(
+        "/health",
+        method="GET",
+        query="foo=bar",
+        body=b"",
+        headers={"X-Request-Id": "probe-1", "Host": "localhost"},
+    )
+    assert flask_app.calls == []
+    received = django_app.calls[0]
+    assert received["REQUEST_METHOD"] == "GET"
+    assert received["QUERY_STRING"] == "foo=bar"
+    assert received["PATH_INFO"] == "/health"
+    assert received["HTTP_X_REQUEST_ID"] == "probe-1"
+    assert received["HTTP_HOST"] == "localhost"
+    assert received["wsgi.input"].read() == b""
+
+
+def test_wsgi_live_health_returns_ok_json():
+    import json
+    import wsgi
+
+    recorded: dict = {}
+
+    def start_response(status, headers, exc_info=None):
+        recorded["status"] = status
+        recorded["headers"] = {key: value for key, value in headers}
+
+    body = b"".join(
+        wsgi.app(_environ("/health", headers={"Host": "testserver"}), start_response)
+    )
+    assert recorded["status"].startswith("200")
+    assert json.loads(body) == {"status": "ok"}
+    assert recorded["headers"]["Content-Type"] == "application/json"
+    assert body == b'{"status":"ok"}\n'

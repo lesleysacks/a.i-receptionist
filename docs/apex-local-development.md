@@ -69,7 +69,7 @@ python manage.py create_platform_admin --email staff@example.com --password 'a-l
 
 - Receptionist login: `http://localhost:5000/login`
 - Django login: `http://localhost:5000/accounts/login/` (via `wsgi:app` dispatcher)
-- Health: `GET /health`, `GET /ready`
+- Health: Django `GET /health` (liveness); Flask `GET /ready` (readiness)
 - Leads: `GET /leads` (authenticated, tenant-scoped)
 
 Gunicorn:

@@ -18,7 +18,6 @@ FLASK_PREFIXES: tuple[str, ...] = (
     "/dashboard",
     "/login",
     "/logout",
-    "/health",
     "/ready",
 )
 
