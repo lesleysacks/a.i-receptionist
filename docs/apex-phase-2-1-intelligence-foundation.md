@@ -102,12 +102,14 @@ webhook, isolation, and AI tests stay enabled.
 
 - Keyword/FAQ matching is intentionally narrow; many questions still use AI.
 - FAQ overlap is token-based, not semantic (no RAG).
-- Pipeline outcomes are logged, not stored as usage/cost rows (Phase 2.4).
+- Pipeline outcomes are persisted in redacted form (Phase 2.2); token cost
+  accounting remains Phase 2.4.
 - Flask and Django sessions remain separate (Phase 1).
 - One shared OpenAI/Twilio credential set for all tenants.
 
 ## Recommended next milestone
 
-Phase 2.2: persist redacted pipeline outcomes for operator visibility, then
-continue the Phase 1 plan to collapse Flask/Django HTTP onto Django without
-changing conversation behaviour. Do not add RAG, billing, or new channels yet.
+Phase 2.2 stores redacted pipeline outcomes
+(`docs/apex-phase-2-2-intelligence-outcomes.md`). Next: collapse Flask/Django
+HTTP onto Django without changing conversation behaviour. Do not add RAG,
+billing, or new channels yet.

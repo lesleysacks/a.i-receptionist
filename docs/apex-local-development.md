@@ -40,6 +40,7 @@ entrypoint runs both Alembic and Django migrate.
 Rollback (disposable data only):
 
 ```bash
+python manage.py migrate intelligence zero
 python manage.py migrate accounts zero
 alembic downgrade 379ee94dc59e   # drops processed_webhooks
 ```

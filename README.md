@@ -9,6 +9,7 @@ can book appointments through a guided, durable conversation.
 > Phase 0 audit: [`docs/apex-phase-0-architecture-audit.md`](docs/apex-phase-0-architecture-audit.md).
 > Phase 1 notes: [`docs/apex-phase-1-implementation.md`](docs/apex-phase-1-implementation.md).
 > Phase 2.1 intelligence: [`docs/apex-phase-2-1-intelligence-foundation.md`](docs/apex-phase-2-1-intelligence-foundation.md).
+> Phase 2.2 outcomes: [`docs/apex-phase-2-2-intelligence-outcomes.md`](docs/apex-phase-2-2-intelligence-outcomes.md).
 > Security: [`docs/apex-security.md`](docs/apex-security.md).
 
 ---

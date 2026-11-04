@@ -25,8 +25,27 @@ from apex_receptionist.intelligence.types import (
 logger = logging.getLogger(__name__)
 
 
+def _default_persist(business_id: int, result: PipelineResult) -> None:
+    from apps.intelligence.services import record_pipeline_outcome
+
+    record_pipeline_outcome(
+        business_id=business_id,
+        intent=result.classification.intent.value,
+        classification_method=result.classification.method,
+        confidence=result.classification.confidence,
+        decision=result.decision.value,
+        response_type=result.response_type,
+        ai_required=result.ai_required,
+        outcome=result.outcome,
+        duration_ms=result.duration_ms,
+    )
+
+
 class ResponsePipeline:
     """Code-first interpreter for idle receptionist messages."""
+
+    def __init__(self, persist_outcome=None) -> None:
+        self._persist_outcome = persist_outcome or _default_persist
 
     def decide(self, business, message: str) -> PipelineResult:
         started = time.perf_counter()
@@ -58,6 +77,13 @@ class ResponsePipeline:
                 "latency_ms": duration_ms,
             },
         )
+        try:
+            self._persist_outcome(facts.business_id, finished)
+        except Exception:
+            logger.exception(
+                "Intelligence outcome persistence failed business_id=%s",
+                facts.business_id,
+            )
         return finished
 
     def _route(self, facts, classification: Classification) -> PipelineResult:
