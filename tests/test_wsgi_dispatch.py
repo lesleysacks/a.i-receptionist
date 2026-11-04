@@ -361,3 +361,111 @@ def test_wsgi_live_health_unsafe_methods_are_405_not_403():
         except json.JSONDecodeError:
             payload = None
         assert payload != {"status": "ok"}, method
+
+
+def test_ready_dispatch_preserves_method_query_headers_and_body():
+    flask_app, django_app, _body = _dispatch(
+        "/ready",
+        method="GET",
+        query="foo=bar",
+        body=b"",
+        headers={"X-Request-Id": "probe-ready", "Host": "not-allowed.example"},
+    )
+    assert django_app.calls == []
+    received = flask_app.calls[0]
+    assert received["REQUEST_METHOD"] == "GET"
+    assert received["QUERY_STRING"] == "foo=bar"
+    assert received["PATH_INFO"] == "/ready"
+    assert received["HTTP_X_REQUEST_ID"] == "probe-ready"
+    assert received["HTTP_HOST"] == "not-allowed.example"
+    assert received["wsgi.input"].read() == b""
+
+
+def test_wsgi_live_ready_returns_ready_json():
+    import json
+    import wsgi
+
+    recorded: dict = {}
+
+    def start_response(status, headers, exc_info=None):
+        recorded["status"] = status
+        recorded["headers"] = {key: value for key, value in headers}
+
+    body = b"".join(
+        wsgi.app(_environ("/ready", headers={"Host": "not-allowed.example"}), start_response)
+    )
+    assert recorded["status"].startswith("200")
+    assert json.loads(body) == {"status": "ready", "checks": {"database": "ok"}}
+    assert recorded["headers"]["Content-Type"] == "application/json"
+    assert recorded["headers"]["Content-Length"] == "46"
+    assert body == b'{"checks":{"database":"ok"},"status":"ready"}\n'
+
+
+def test_wsgi_live_ready_head_has_empty_body_and_get_content_length():
+    import wsgi
+
+    recorded: dict = {}
+
+    def start_response(status, headers, exc_info=None):
+        recorded["status"] = status
+        recorded["headers"] = {key: value for key, value in headers}
+
+    body = b"".join(
+        wsgi.app(
+            _environ("/ready", method="HEAD", headers={"Host": "testserver"}),
+            start_response,
+        )
+    )
+    assert recorded["status"].startswith("200")
+    assert body == b""
+    assert recorded["headers"]["Content-Type"] == "application/json"
+    assert recorded["headers"]["Content-Length"] == "46"
+
+
+def test_wsgi_live_ready_options_is_200_and_post_is_405():
+    import wsgi
+
+    for method, prefix in (("OPTIONS", "200"), ("POST", "405")):
+        recorded: dict = {}
+
+        def start_response(status, headers, exc_info=None, recorded=recorded):
+            recorded["status"] = status
+            recorded["headers"] = {key: value for key, value in headers}
+
+        body = b"".join(
+            wsgi.app(
+                _environ("/ready", method=method, headers={"Host": "testserver"}),
+                start_response,
+            )
+        )
+        assert recorded["status"].startswith(prefix), method
+        if method == "POST":
+            assert not recorded["status"].startswith("403")
+            assert b'"status":"ready"' not in body
+
+
+def test_wsgi_live_ownership_ready_health_whatsapp_leads_accounts(monkeypatch):
+    """Production dispatcher still splits ops and receptionist paths as in M1.1."""
+    import wsgi
+
+    flask_app = RecordingApp("flask")
+    django_app = RecordingApp("django")
+    monkeypatch.setattr(wsgi, "flask_app", flask_app)
+    monkeypatch.setattr(wsgi, "django_app", django_app)
+
+    def start_response(status, headers, exc_info=None):
+        return None
+
+    for path, method in (
+        ("/ready", "GET"),
+        ("/health", "GET"),
+        ("/whatsapp", "POST"),
+        ("/leads", "GET"),
+        ("/accounts", "GET"),
+    ):
+        list(wsgi.app(_environ(path, method=method), start_response))
+
+    assert [call["PATH_INFO"] for call in flask_app.calls] == ["/ready", "/whatsapp", "/leads"]
+    assert [call["PATH_INFO"] for call in django_app.calls] == ["/health", "/accounts"]
+    assert [call["REQUEST_METHOD"] for call in flask_app.calls] == ["GET", "POST", "GET"]
+    assert [call["REQUEST_METHOD"] for call in django_app.calls] == ["GET", "GET"]

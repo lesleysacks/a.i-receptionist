@@ -68,6 +68,7 @@ alembic revision --autogenerate -m "describe change"   # create a new migration
 | `MAX_CONTENT_LENGTH` | No | Max request body bytes (default 65536). |
 | `DATABASE_URL` | No | SQLAlchemy/Django URL. Default `sqlite:///receptionist.db`; use `postgresql://...` for production. |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` / `DB_POOL_TIMEOUT` / `DB_POOL_RECYCLE` | No | PostgreSQL pool tuning (defaults 5 / 10 / 30 / 1800). |
+| `DB_CONNECT_TIMEOUT` | No | PostgreSQL TCP/auth handshake timeout seconds (default 3). Independent of `DB_POOL_TIMEOUT`. |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Yes (to boot) | Twilio credentials; the auth token validates webhook signatures. |
 | `TWILIO_WHATSAPP_NUMBER` / `OWNER_PHONE_NUMBER` | No | Outbound sender and fallback owner-notification number. |
 | `OPENAI_API_KEY` | No | Enables live AI answers; without it, answers fall back safely. |
@@ -75,6 +76,7 @@ alembic revision --autogenerate -m "describe change"   # create a new migration
 | `OPENAI_MODEL` / `OPENAI_TIMEOUT` | No | Chat model (default `gpt-4.1-mini`) and request timeout seconds (default `15`). |
 | `ADMIN_API_KEY` | No | Operator-level key for the JSON `/admin` API (must send `X-Business-Id`). |
 | `REDIS_URL` | No | Enables Redis-backed distributed rate limiting and RQ background jobs (e.g. `redis://redis:6379/0`). Without it, jobs run inline and rate limiting is process-local. |
+| `REDIS_CONNECT_TIMEOUT` / `REDIS_SOCKET_TIMEOUT` | No | Redis TCP connect and PING/read timeouts in seconds (defaults 3 / 3). Used by jobs and `GET /ready`. |
 | `SENTRY_DSN` | No | Enables optional Sentry error tracking. Without it, error tracking is off and the app runs normally. |
 | `SESSION_COOKIE_SECURE` | No | Force `Secure` session cookies (default on in production). |
 | `LOGIN_MAX_ATTEMPTS` / `LOGIN_WINDOW_SECONDS` / `LOGIN_LOCKOUT_SECONDS` | No | Login rate-limit tuning (defaults 5 / 300 / 300). |
