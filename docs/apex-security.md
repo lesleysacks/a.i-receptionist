@@ -9,7 +9,7 @@
 | CSRF on Django login | Django `CsrfViewMiddleware` |
 | Password hashing | Django PBKDF2 via `User.set_password` |
 | Session cookies | HttpOnly, SameSite=Lax, Secure in production |
-| Django hosts | `DJANGO_ALLOWED_HOSTS` required in production; wildcard `*` rejected |
+| Django hosts | `DJANGO_ALLOWED_HOSTS` required in production; `*` (alone or mixed) rejected at import |
 | Login rate limit | Flask `/login` (Redis or process-local) |
 | Tenant isolation | Membership queries; platform admin must send `X-Business-Id` |
 | JSON admin auth | Session principal or `ADMIN_API_KEY` + `X-Business-Id` |
@@ -53,6 +53,8 @@ Provide secrets only via environment variables or a secret manager. Names:
 `ADMIN_API_KEY`, `ADMIN_PASSWORD`, `SENTRY_DSN`, `DATABASE_URL`, `REDIS_URL`.
 
 Non-secret but required in production: `DJANGO_ALLOWED_HOSTS` (explicit hosts only).
+Missing, empty, wildcard, URL, or path-like values raise `InvalidDjangoAllowedHosts`
+while `apex.settings` is imported (process boot), not on the first request.
 
 Never log them. Never put them in docs, fixtures, or audit metadata.
 

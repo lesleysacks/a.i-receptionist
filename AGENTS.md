@@ -64,7 +64,7 @@ python worker.py                          # background jobs (needs REDIS_URL)
 ### Run the full stack with Docker
 
 ```bash
-docker compose up --build                 # app + postgres + redis + worker
+docker compose up --build                 # app + postgres + redis + worker (DJANGO_ALLOWED_HOSTS defaults to localhost)
 curl localhost:5000/health                # {"status":"ok"}
 curl localhost:5000/ready                 # {"checks":{"database":"ok","redis":"ok"},"status":"ready"}
 ```

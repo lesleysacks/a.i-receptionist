@@ -26,13 +26,18 @@ from services.logging_setup import configure_logging
 from services.observability import init_sentry
 from apex_receptionist.adapters.twilio_webhook import is_valid_twilio_signature
 from apex_receptionist.models.processed_webhook import ProcessedWebhook
-from routes.admin import admin_bp
-from routes.auth import auth_bp, login_required, login_rate_limiter
-from routes.dashboard import dashboard_bp
-from routes.ops import ops_bp
 
+# Blueprints import Django models. Load .env then initialise Django before
+# those imports so production host validation runs at boot and the app
+# registry is ready (Gunicorn `wsgi:app` does not go through tests/conftest).
 load_dotenv()
 setup_django()
+
+from routes.admin import admin_bp  # noqa: E402
+from routes.auth import auth_bp, login_required, login_rate_limiter  # noqa: E402
+from routes.dashboard import dashboard_bp  # noqa: E402
+from routes.ops import ops_bp  # noqa: E402
+
 configure_logging()
 init_sentry()
 logger = logging.getLogger(__name__)
