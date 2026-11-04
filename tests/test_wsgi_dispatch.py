@@ -312,4 +312,52 @@ def test_wsgi_live_health_returns_ok_json():
     assert recorded["status"].startswith("200")
     assert json.loads(body) == {"status": "ok"}
     assert recorded["headers"]["Content-Type"] == "application/json"
+    assert recorded["headers"]["Content-Length"] == "16"
     assert body == b'{"status":"ok"}\n'
+
+
+def test_wsgi_live_health_head_has_empty_body_and_content_length_16():
+    import wsgi
+
+    recorded: dict = {}
+
+    def start_response(status, headers, exc_info=None):
+        recorded["status"] = status
+        recorded["headers"] = {key: value for key, value in headers}
+
+    body = b"".join(
+        wsgi.app(
+            _environ("/health", method="HEAD", headers={"Host": "testserver"}),
+            start_response,
+        )
+    )
+    assert recorded["status"].startswith("200")
+    assert body == b""
+    assert recorded["headers"]["Content-Type"] == "application/json"
+    assert recorded["headers"]["Content-Length"] == "16"
+
+
+def test_wsgi_live_health_unsafe_methods_are_405_not_403():
+    import json
+    import wsgi
+
+    for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        recorded: dict = {}
+
+        def start_response(status, headers, exc_info=None, recorded=recorded):
+            recorded["status"] = status
+            recorded["headers"] = {key: value for key, value in headers}
+
+        body = b"".join(
+            wsgi.app(
+                _environ("/health", method=method, headers={"Host": "testserver"}),
+                start_response,
+            )
+        )
+        assert recorded["status"].startswith("405"), method
+        assert not recorded["status"].startswith("403"), method
+        try:
+            payload = json.loads(body.decode() or "{}")
+        except json.JSONDecodeError:
+            payload = None
+        assert payload != {"status": "ok"}, method

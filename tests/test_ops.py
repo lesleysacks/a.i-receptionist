@@ -8,9 +8,16 @@ from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 
+from apps.ops.views import _HEALTH_BODY_BYTES, _HEALTH_CONTENT_LENGTH
+
 
 def _django():
     return Client()
+
+
+def _django_csrf():
+    """Client that applies CsrfViewMiddleware the same way Gunicorn does."""
+    return Client(enforce_csrf_checks=True)
 
 
 def test_health_is_ok_and_independent_of_database(monkeypatch):
@@ -22,7 +29,7 @@ def test_health_is_ok_and_independent_of_database(monkeypatch):
 
     monkeypatch.setattr("routes.ops.engine", _BrokenEngine())
     with CaptureQueriesContext(connection) as queries:
-        resp = _django().get("/health")
+        resp = _django_csrf().get("/health")
     assert queries.captured_queries == []
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
@@ -30,10 +37,12 @@ def test_health_is_ok_and_independent_of_database(monkeypatch):
 
 
 def test_health_preserves_flask_json_contract():
-    resp = _django().get("/health")
+    resp = _django_csrf().get("/health")
     assert resp.status_code == 200
     assert resp["Content-Type"] == "application/json"
     assert resp.content == b'{"status":"ok"}\n'
+    assert resp.content == _HEALTH_BODY_BYTES
+    assert resp["Content-Length"] == _HEALTH_CONTENT_LENGTH == "16"
     assert resp.json() == {"status": "ok"}
     assert "database" not in resp.json()
     assert "redis" not in resp.json()
@@ -58,18 +67,20 @@ def test_health_query_string_is_ignored():
     assert resp.json() == {"status": "ok"}
 
 
-def test_health_head_is_empty_json_content_type():
-    resp = _django().head("/health")
+def test_health_head_is_empty_with_get_content_length():
+    resp = _django_csrf().head("/health")
     assert resp.status_code == 200
     assert resp["Content-Type"] == "application/json"
     assert resp.content == b""
+    assert resp["Content-Length"] == "16"
 
 
-def test_health_unsupported_methods_do_not_return_ok():
-    client = _django()
-    for method in ("post", "put", "patch", "delete"):
+def test_health_unsupported_methods_are_405_not_403_with_csrf_enforced():
+    client = _django_csrf()
+    for method in ("post", "put", "patch", "delete", "options"):
         resp = getattr(client, method)("/health")
-        assert resp.status_code == 405, method
+        assert resp.status_code == 405, f"{method} -> {resp.status_code}"
+        assert resp.status_code != 403
         try:
             payload = json.loads(resp.content.decode() or "{}")
         except json.JSONDecodeError:

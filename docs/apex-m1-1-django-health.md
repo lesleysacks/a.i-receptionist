@@ -17,7 +17,7 @@ M1.1 moves **only** the liveness endpoint from Flask to Django. `/ready` and eve
 
 ## New Django implementation
 
-- View: `apps.ops.views.health` (`@require_http_methods(["GET", "HEAD"])`)
+- View: `apps.ops.views.health` (`@csrf_exempt` then `@require_http_methods(["GET", "HEAD"])`)
 - URL: `apps/ops/urls.py` → `path("health", ...)` included from `apex/urls.py`
 - Body: the same compact JSON plus newline (`json.dumps(..., separators=(",", ":")) + "\n"`)
 - No database, Redis, tenant, or environment values in the response
@@ -34,9 +34,9 @@ Rollback: restore `"/health"` on `FLASK_PREFIXES` and the Flask `ops.health` vie
 | Request | Result |
 | --- | --- |
 | `GET /health` | `200`, `Content-Type: application/json`, body `{"status":"ok"}\n` |
-| `HEAD /health` | `200`, `Content-Type: application/json`, empty body |
+| `HEAD /health` | `200`, `Content-Type: application/json`, empty body, `Content-Length: 16` |
 | `GET /health?foo=bar` | Same JSON as GET |
-| `POST` / `PUT` / `PATCH` / `DELETE` | `405`, not `{"status":"ok"}` |
+| `POST` / `PUT` / `PATCH` / `DELETE` / `OPTIONS` | `405` (not CSRF `403`), not `{"status":"ok"}` |
 | `GET /health/` | `404` |
 | `GET /health/something` | `404` |
 
@@ -53,6 +53,7 @@ Rollback: restore `"/health"` on `FLASK_PREFIXES` and the Flask `ops.health` vie
 
 - Django `ALLOWED_HOSTS` now applies to `/health` (Flask did not). Probes must send an allowed `Host` (compose default `localhost,127.0.0.1`). Do not set `*`.
 - Flask `OPTIONS /health` was `200`; Django returns `405`. Probes use GET/HEAD. CORS was not added.
+- M1.1.1: `@csrf_exempt` applies **only** to `apps.ops.views.health` so Gunicorn POST/PUT hit the method restriction (`405`) instead of `CsrfViewMiddleware` (`403`). HEAD sets `Content-Length` to the GET payload size after emptying the body. Other views keep CSRF.
 - Flask JSON access logs (`app._log_request`) no longer include `/health`.
 - `GET /ready` is still Flask.
 
