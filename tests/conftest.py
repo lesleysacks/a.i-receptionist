@@ -54,8 +54,10 @@ def reset_db():
     Base.metadata.create_all(bind=engine)
     from apps.accounts.models import User
     from apps.audit.models import AuditEvent
+    from apps.intelligence.models import IntelligenceOutcome
     from apps.tenants.models import Membership, Tenant
 
+    IntelligenceOutcome.objects.all().delete()
     AuditEvent.objects.all().delete()
     Membership.objects.all().delete()
     Tenant.objects.all().delete()
