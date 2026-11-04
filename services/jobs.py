@@ -6,6 +6,8 @@ from apex_receptionist.services.jobs import (
     enqueue_owner_notification,
     get_queue,
     get_redis_connection,
+    redis_client_kwargs,
+    redis_is_reachable,
     redis_url,
 )
 
@@ -15,5 +17,7 @@ __all__ = [
     "enqueue_owner_notification",
     "get_queue",
     "get_redis_connection",
+    "redis_client_kwargs",
+    "redis_is_reachable",
     "redis_url",
 ]

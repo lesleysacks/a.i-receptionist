@@ -29,11 +29,33 @@ def _normalize_url(url: str) -> str:
     return url
 
 
+# TCP/auth handshake limit for PostgreSQL. Distinct from DB_POOL_TIMEOUT, which
+# only waits for a free pool slot. Default 3s matches Compose healthcheck
+# timeouts and stays well under GUNICORN_TIMEOUT (default 30s).
+DEFAULT_DB_CONNECT_TIMEOUT = 3
+DEFAULT_DB_POOL_TIMEOUT = 30
+
+
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, default))
     except (TypeError, ValueError):
         return default
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """Return a positive int from *name*, otherwise *default*.
+
+    Zero is rejected because psycopg2 treats ``connect_timeout=0`` as wait
+    forever, which would undo bounded readiness checks.
+    """
+    value = _int_env(name, default)
+    return value if value > 0 else default
+
+
+def postgres_connect_args() -> dict[str, int]:
+    """psycopg2 connect() kwargs. Not used for SQLite."""
+    return {"connect_timeout": _positive_int_env("DB_CONNECT_TIMEOUT", DEFAULT_DB_CONNECT_TIMEOUT)}
 
 
 def _create_engine(url: str):
@@ -43,13 +65,16 @@ def _create_engine(url: str):
         # A single-file DB; keep cross-thread access working for the dev server.
         return create_engine(url, connect_args={"check_same_thread": False}, future=True)
     # Server databases (e.g. PostgreSQL): pool with liveness checks and recycling.
+    # connect_timeout bounds new TCP/auth handshakes; pool_timeout bounds wait
+    # for a pooled connection. They are independent.
     return create_engine(
         url,
         pool_size=_int_env("DB_POOL_SIZE", 5),
         max_overflow=_int_env("DB_MAX_OVERFLOW", 10),
-        pool_timeout=_int_env("DB_POOL_TIMEOUT", 30),
+        pool_timeout=_int_env("DB_POOL_TIMEOUT", DEFAULT_DB_POOL_TIMEOUT),
         pool_recycle=_int_env("DB_POOL_RECYCLE", 1800),
         pool_pre_ping=True,
+        connect_args=postgres_connect_args(),
         future=True,
     )
 

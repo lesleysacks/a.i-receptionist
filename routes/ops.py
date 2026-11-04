@@ -12,7 +12,7 @@ from flask import Blueprint, jsonify
 from sqlalchemy import text
 
 from database import engine
-from services.jobs import get_redis_connection, redis_url
+from services.jobs import redis_is_reachable, redis_url
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def ready():
 
     # Redis is only required when configured (jobs / shared rate limiting).
     if redis_url():
-        checks["redis"] = "ok" if get_redis_connection() is not None else "unavailable"
+        checks["redis"] = "ok" if redis_is_reachable() else "unavailable"
         if checks["redis"] != "ok":
             ready_ok = False
 
