@@ -79,6 +79,9 @@ gunicorn -c gunicorn.conf.py wsgi:app
 ```
 
 Docker Compose (app + PostgreSQL + Redis + worker): `docker compose up --build`.
+Compose sets `APP_ENV=production` and defaults `DJANGO_ALLOWED_HOSTS` to
+`localhost,127.0.0.1` so Django can import. Override that variable for any
+non-localhost hostname. The production image does not default hosts.
 
 ## Tests
 

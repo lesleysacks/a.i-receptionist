@@ -27,13 +27,63 @@ if not SECRET_KEY:
     SECRET_KEY = "django-insecure-dev-only-not-for-production"
 
 
+class InvalidDjangoAllowedHosts(RuntimeError):
+    """Raised when production DJANGO_ALLOWED_HOSTS is missing or insecure.
+
+    This is raised while ``apex.settings`` is imported (module-level
+    ``ALLOWED_HOSTS = allowed_hosts_for_env(...)``). Gunicorn ``wsgi:app``,
+    ``app.py`` ``setup_django()``, and ``manage.py`` all import settings, so an
+    invalid production configuration fails at process boot rather than on
+    the first Django request.
+    """
+
+
+def parse_allowed_hosts(raw: str | None) -> list[str]:
+    """Split a comma-separated DJANGO_ALLOWED_HOSTS value into hostnames."""
+    return [host.strip() for host in (raw or "").split(",") if host.strip()]
+
+
+def _invalid_production_hosts(hosts: list[str]) -> list[str]:
+    """Return host entries that production must never accept."""
+    invalid: list[str] = []
+    for host in hosts:
+        if "*" in host:
+            invalid.append(host)
+        elif any(ch.isspace() for ch in host):
+            invalid.append(host)
+        elif "/" in host or "\\" in host:
+            invalid.append(host)
+    return invalid
+
+
 def allowed_hosts_for_env(app_env: str, raw: str | None) -> list[str]:
-    """Parse DJANGO_ALLOWED_HOSTS. Production must name explicit hosts."""
+    """Parse DJANGO_ALLOWED_HOSTS. Production must name explicit hosts.
+
+    Development and testing may omit the variable (localhost defaults).
+    Production never accepts an empty list or any ``*`` wildcard, including
+    mixed lists such as ``apex.example,*``. Leading-dot Django subdomain
+    patterns (``.example.com``) remain allowed because they name a suffix.
+    """
     env = (app_env or "development").strip().lower()
-    hosts = [host.strip() for host in (raw or "").split(",") if host.strip()]
+    hosts = parse_allowed_hosts(raw)
     if env == "production":
-        if not hosts or hosts == ["*"]:
-            raise RuntimeError("DJANGO_ALLOWED_HOSTS must list explicit hosts in production.")
+        if not hosts:
+            raise InvalidDjangoAllowedHosts(
+                "DJANGO_ALLOWED_HOSTS must be set to a comma-separated list of "
+                "explicit hostnames when APP_ENV=production. Example: "
+                "DJANGO_ALLOWED_HOSTS=apex.example.com,www.apex.example.com. "
+                "Wildcard '*' is not allowed. The process refuses to boot "
+                "rather than serving Django with an empty or wildcard host list."
+            )
+        invalid = _invalid_production_hosts(hosts)
+        if invalid:
+            raise InvalidDjangoAllowedHosts(
+                "DJANGO_ALLOWED_HOSTS must list explicit hostnames when "
+                "APP_ENV=production; rejected "
+                f"{', '.join(invalid)}. Wildcard '*', URLs, paths, and "
+                "whitespace inside a host entry are not allowed. Example: "
+                "DJANGO_ALLOWED_HOSTS=apex.example.com"
+            )
         return hosts
     if not hosts:
         hosts = ["localhost", "127.0.0.1"]

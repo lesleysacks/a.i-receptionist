@@ -63,7 +63,7 @@ alembic revision --autogenerate -m "describe change"   # create a new migration
 | `APP_ENV` | No | `development` (default) / `testing` / `production`. |
 | `SECRET_KEY` | Prod: **yes** | Flask/Django session signing key. Required in production; dev uses an ephemeral key. |
 | `DJANGO_SETTINGS_MODULE` | No | Default `apex.settings`. |
-| `DJANGO_ALLOWED_HOSTS` | Prod: **yes** | Comma-separated Django hosts. Required in production; `*` is rejected. |
+| `DJANGO_ALLOWED_HOSTS` | Prod: **yes** | Comma-separated Django hosts. Required in production; `*` (alone or in a list) is rejected at import. |
 | `WEBHOOK_BASE_URL` | Prod: recommended | Public origin Twilio signed (e.g. `https://apex.example`). |
 | `MAX_CONTENT_LENGTH` | No | Max request body bytes (default 65536). |
 | `DATABASE_URL` | No | SQLAlchemy/Django URL. Default `sqlite:///receptionist.db`; use `postgresql://...` for production. |

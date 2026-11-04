@@ -12,26 +12,23 @@ import os
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "apex.settings")
 
+from apex.http_dispatch import (  # noqa: E402
+    FLASK_PREFIXES,
+    dispatch_wsgi,
+    flask_owns_path,
+)
 from app import app as flask_app  # noqa: E402
 from apex.wsgi import application as django_app  # noqa: E402
 
-FLASK_PREFIXES = (
-    "/whatsapp",
-    "/leads",
-    "/admin",
-    "/dashboard",
-    "/login",
-    "/logout",
-    "/health",
-    "/ready",
-)
-
 
 def app(environ, start_response):
-    path = environ.get("PATH_INFO") or ""
-    if path == "/" or any(path == prefix or path.startswith(prefix + "/") for prefix in FLASK_PREFIXES):
-        return flask_app(environ, start_response)
-    return django_app(environ, start_response)
+    """Dispatch one WSGI request to Flask or Django by PATH_INFO prefix."""
+    return dispatch_wsgi(
+        environ,
+        start_response,
+        flask_app=flask_app,
+        django_app=django_app,
+    )
 
 
-__all__ = ["app", "flask_app"]
+__all__ = ["app", "django_app", "flask_app", "FLASK_PREFIXES", "flask_owns_path"]

@@ -1,5 +1,7 @@
 # Local full-stack for the AI Receptionist: app (Gunicorn) + PostgreSQL + Redis + worker.
 # Postgres and Redis are NOT published to the host — only the app's port is exposed.
+# APP_ENV=production requires DJANGO_ALLOWED_HOSTS (fail-closed). The localhost
+# default is for this compose file only; real deployments must set public hosts.
 services:
   postgres:
     image: postgres:16
@@ -29,6 +31,7 @@ services:
       APP_ENV: production
       DJANGO_SETTINGS_MODULE: apex.settings
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       DATABASE_URL: postgresql://receptionist:${POSTGRES_PASSWORD:-receptionist}@postgres:5432/receptionist
       REDIS_URL: redis://redis:6379/0
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
@@ -52,6 +55,7 @@ services:
       APP_ENV: production
       DJANGO_SETTINGS_MODULE: apex.settings
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
       DATABASE_URL: postgresql://receptionist:${POSTGRES_PASSWORD:-receptionist}@postgres:5432/receptionist
       REDIS_URL: redis://redis:6379/0
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
