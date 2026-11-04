@@ -1,4 +1,8 @@
-"""Operational endpoints: liveness (/health) and readiness (/ready)."""
+"""Operational endpoints still served by Flask.
+
+``GET /health`` moved to Django (``apps.ops.views.health``). This blueprint
+keeps ``GET /ready`` only.
+"""
 
 from __future__ import annotations
 
@@ -13,12 +17,6 @@ from services.jobs import get_redis_connection, redis_url
 logger = logging.getLogger(__name__)
 
 ops_bp = Blueprint("ops", __name__)
-
-
-@ops_bp.get("/health")
-def health():
-    """Liveness: the process is up. Deliberately does NOT touch the database."""
-    return jsonify({"status": "ok"}), 200
 
 
 @ops_bp.get("/ready")

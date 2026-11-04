@@ -130,6 +130,7 @@ INSTALLED_APPS = [
     "apps.tenants",
     "apps.audit",
     "apps.intelligence",
+    "apps.ops",
 ]
 
 MIDDLEWARE = [

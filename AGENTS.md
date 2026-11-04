@@ -69,7 +69,7 @@ curl localhost:5000/health                # {"status":"ok"}
 curl localhost:5000/ready                 # {"checks":{"database":"ok","redis":"ok"},"status":"ready"}
 ```
 
-Ops endpoints: `GET /health` (liveness, no DB) and `GET /ready` (DB + Redis).
+Ops endpoints: `GET /health` (Django liveness, no DB) and `GET /ready` (Flask readiness, DB + Redis).
 Logs are structured JSON (`LOG_FORMAT=json`).
 
 ### Run tests

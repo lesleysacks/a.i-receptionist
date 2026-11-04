@@ -7,4 +7,5 @@ urlpatterns = [
     path("platform/django-admin/", admin.site.urls),
     path("accounts/", include("apps.accounts.urls")),
     path("platform/", include("apps.tenants.urls")),
+    path("", include("apps.ops.urls")),
 ]
