@@ -40,22 +40,54 @@ class AIService:
         self.client = client
         self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
-    def respond(self, business_id: int, sender: str, message: str, channel: str = "whatsapp") -> AIResponse:
-        """Persist an inbound message, request structured AI output, then persist it."""
+    def respond(
+        self,
+        business_id: int,
+        sender: str,
+        message: str,
+        channel: str = "whatsapp",
+        booking_enabled: bool = True,
+        booking_prompt: str | None = None,
+    ) -> AIResponse:
+        """Persist an inbound message, request structured AI output, then persist it.
+
+        When the result is ``start_booking`` the customer-facing text is replaced by
+        ``booking_prompt`` so the reply always matches the backend booking flow.
+        """
         customer = self._get_or_create_customer(business_id, sender)
         history = self._history(business_id, customer.id)
         self.record_message(business_id, customer.id, channel, "user", message)
-        try:
-            result = self._ask_model(business_id, customer.id, message, history)
-        except Exception:
-            logger.exception("AI fallback used for business_id=%s customer_id=%s", business_id, customer.id)
-            result = AIResponse(
-                message="Thanks for your message. A team member will assist you shortly.",
-                action="handoff_human",
-                customer_id=customer.id,
-            )
+        if not os.getenv("OPENAI_API_KEY") and self.client is None:
+            result = self._keyword_fallback(message, customer.id)
+        else:
+            try:
+                result = self._ask_model(business_id, customer.id, message, history)
+            except Exception:
+                logger.exception("AI fallback used for business_id=%s customer_id=%s", business_id, customer.id)
+                result = self._keyword_fallback(message, customer.id)
+        if result.action == "start_booking":
+            if not booking_enabled:
+                result = AIResponse(
+                    message="Online booking isn't available right now, but a team member will contact you to arrange it.",
+                    action="handoff_human",
+                    customer_id=customer.id,
+                )
+            elif booking_prompt:
+                result = AIResponse(message=booking_prompt, action="start_booking", customer_id=customer.id)
         self.record_message(business_id, customer.id, channel, "assistant", result.message)
         return result
+
+    @staticmethod
+    def _keyword_fallback(message: str, customer_id: int) -> AIResponse:
+        """Minimal behaviour when OpenAI is unavailable: booking still works, everything else is handed off."""
+        lowered = message.lower()
+        if any(word in lowered for word in ("book", "appointment", "schedule", "reserve")):
+            return AIResponse(message="Let's get you booked.", action="start_booking", customer_id=customer_id)
+        return AIResponse(
+            message="Thanks for your message. A team member will assist you shortly. Reply BOOK to request an appointment.",
+            action="handoff_human",
+            customer_id=customer_id,
+        )
 
     def record_booking_exchange(self, business_id: int, sender: str, customer_message: str, assistant_message: str, channel: str = "whatsapp") -> None:
         """Persist deterministic booking-form messages without calling the model."""
@@ -125,7 +157,7 @@ class AIService:
                 select(Conversation).where(
                     Conversation.business_id == business_id,
                     Conversation.customer_id == customer_id,
-                ).order_by(Conversation.timestamp.desc()).limit(MAX_HISTORY_MESSAGES)
+                ).order_by(Conversation.id.desc()).limit(MAX_HISTORY_MESSAGES)
             ))
         records.reverse()
         return [{"role": item.role, "content": item.content} for item in records]

@@ -89,7 +89,7 @@ class BusinessService:
             description=_optional_text(data.get("description")),
             price=_price(data.get("price")),
             duration_minutes=_duration(data.get("duration_minutes")),
-            active=bool(data.get("active", True)),
+            active=_bool(data.get("active", True)),
         )
         try:
             with get_session() as session:
@@ -113,7 +113,7 @@ class BusinessService:
                 service.name = name
             for field in ("description", "active"):
                 if field in data:
-                    setattr(service, field, _optional_text(data[field]) if field == "description" else bool(data[field]))
+                    setattr(service, field, _optional_text(data[field]) if field == "description" else _bool(data[field]))
             if data.get("price", _MISSING) is not _MISSING:
                 service.price = _price(data["price"])
             if data.get("duration_minutes", _MISSING) is not _MISSING:
@@ -204,6 +204,16 @@ def _optional_text(value: Any) -> str | None:
 
 
 _MISSING = object()
+
+
+def _bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in {"true", "1", "yes"}:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"false", "0", "no"}:
+        return False
+    raise ValidationError("Active must be true or false.")
 
 
 def _price(value: Any) -> Decimal | None:
