@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -12,11 +13,18 @@ from flask import Blueprint, jsonify, request
 from models.business import Business
 from models.faq import FAQ
 from models.service import Service
+from routes.auth import check_admin
 from services.business_service import BusinessService, NotFoundError, ValidationError
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
+BOOLEAN_FIELDS = ("booking_enabled", "website_chat_enabled", "whatsapp_enabled", "voice_enabled", "email_enabled")
+
+
+@admin_bp.before_request
+def require_admin():
+    return check_admin()
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s().-]{6,30}$")
+PHONE_PATTERN = re.compile(r"^(whatsapp:)?\+?[0-9][0-9\s().-]{6,30}$")
 
 
 def _default_business() -> Business:
@@ -105,6 +113,14 @@ def _validate_business(data: dict[str, Any]) -> None:
             raise ValidationError(f"{field.replace('_', ' ').capitalize()} must be valid.")
     if "opening_hours" in data and data["opening_hours"] is not None and not str(data["opening_hours"]).strip():
         raise ValidationError("Opening hours cannot be blank; omit it when unknown.")
+    for field in BOOLEAN_FIELDS:
+        if field in data and not isinstance(data[field], bool):
+            raise ValidationError(f"{field} must be true or false.")
+    if "timezone" in data:
+        try:
+            ZoneInfo(str(data["timezone"]))
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValidationError("Timezone must be an IANA name such as Africa/Johannesburg.") from exc
     if "booking_duration" in data:
         try:
             if int(data["booking_duration"]) <= 0:

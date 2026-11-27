@@ -28,7 +28,7 @@ def init_database() -> None:
     SQLAlchemy metadata creation is intentionally idempotent, which provides a
     lightweight migration path for the initial SQLite release.
     """
-    from models import business, booking, conversation, customer, faq, knowledge_document, service  # noqa: F401
+    from models import business, booking, booking_draft, conversation, customer, faq, knowledge_document, service  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _migrate_legacy_conversations()
